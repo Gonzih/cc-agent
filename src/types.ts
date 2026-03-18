@@ -13,6 +13,7 @@ export interface Job {
   workDir?: string;
   startedAt: Date;
   finishedAt?: Date;
+  pid?: number;
 }
 
 export interface SpawnOptions {
