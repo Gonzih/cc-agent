@@ -187,6 +187,7 @@ export class JobManager {
         }
 
         this.kills.set(job.id, () => proc.kill());
+        job.stdinStream = proc.stdin ?? null;
 
         proc.on("text", (text) => {
           if (text.trim()) this.addOutput(job, text);
@@ -198,6 +199,7 @@ export class JobManager {
 
         proc.on("exit", (code) => {
           job.exitCode = code ?? undefined;
+          job.stdinStream = null;
           this.kills.delete(job.id);
           if (code === 0 || code === null) {
             resolve();
@@ -257,6 +259,17 @@ export class JobManager {
       exitCode: j.exitCode,
       error: j.error,
     }));
+  }
+
+  sendMessage(id: string, message: string): { ok: boolean; error?: string } {
+    const job = this.jobs.get(id);
+    if (!job) return { ok: false, error: "Job not found" };
+    if (job.status !== "running") return { ok: false, error: "Agent is not running, cannot send message" };
+    if (!job.stdinStream || job.stdinStream.destroyed) {
+      return { ok: false, error: "Agent stdin is not available (may not support interactive input)" };
+    }
+    job.stdinStream.write(message + "\n");
+    return { ok: true };
   }
 
   cancel(id: string): boolean {

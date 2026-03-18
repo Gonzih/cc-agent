@@ -33,7 +33,7 @@ const token =
 const manager = new JobManager(token);
 
 const server = new Server(
-  { name: "cc-agent", version: "0.1.0" },
+  { name: "cc-agent", version: "0.1.2" },
   { capabilities: { tools: {} } }
 );
 
@@ -112,6 +112,24 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           job_id: { type: "string", description: "Job ID to cancel" },
         },
         required: ["job_id"],
+      },
+    },
+    {
+      name: "send_message",
+      description: "Send a message to a running agent's stdin. Use this to give the agent corrections, new information, or updated instructions mid-task.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          job_id: {
+            type: "string",
+            description: "The job ID of the running agent",
+          },
+          message: {
+            type: "string",
+            description: "The message to send to the agent",
+          },
+        },
+        required: ["job_id", "message"],
       },
     },
   ],
@@ -205,6 +223,20 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           {
             type: "text",
             text: JSON.stringify({ job_id: a.job_id, cancelled }),
+          },
+        ],
+      };
+    }
+
+    case "send_message": {
+      const result = manager.sendMessage(a.job_id as string, a.message as string);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result.ok
+              ? { job_id: a.job_id, sent: true, message: "Message delivered to agent stdin." }
+              : { job_id: a.job_id, sent: false, error: result.error }),
           },
         ],
       };

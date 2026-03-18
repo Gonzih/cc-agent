@@ -16,6 +16,7 @@ export interface OneShot extends EventEmitter {
   on(event: "error", listener: (err: Error) => void): this;
   on(event: "exit", listener: (code: number | null) => void): this;
   pid?: number;
+  stdin?: import("stream").Writable | null;
 }
 
 /**
@@ -50,7 +51,7 @@ export function runClaude(
     }
   }
 
-  const proc = spawn(claudeBin, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"], detached: true });
+  const proc = spawn(claudeBin, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"], detached: true });
   proc.unref();
 
   let buffer = "";
@@ -90,6 +91,7 @@ export function runClaude(
 
   emitter.kill = () => proc.kill();
   emitter.pid = proc.pid;
+  emitter.stdin = proc.stdin;
 
   return emitter;
 }
