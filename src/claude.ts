@@ -35,6 +35,7 @@ export function runClaude(
   const args = [
     "--print",
     "--output-format", "stream-json",
+    "--verbose",
     "--dangerously-skip-permissions",
     task,
   ];
@@ -51,7 +52,6 @@ export function runClaude(
   }
 
   const proc = spawn(claudeBin, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"], detached: true });
-  proc.stdin?.end(); // Close stdin so Claude doesn't hang waiting for input
   proc.unref();
 
   let buffer = "";
