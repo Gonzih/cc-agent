@@ -52,6 +52,7 @@ export function runClaude(
   }
 
   const proc = spawn(claudeBin, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"], detached: true });
+  proc.stdin?.end(); // close stdin so Claude doesn't hang; send_message must write before this or use a different channel
   proc.unref();
 
   let buffer = "";
