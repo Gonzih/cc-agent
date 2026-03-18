@@ -1,3 +1,5 @@
+import type { Writable } from "stream";
+
 export type JobStatus = "cloning" | "running" | "done" | "failed" | "cancelled";
 
 export interface Job {
@@ -14,6 +16,7 @@ export interface Job {
   startedAt: Date;
   finishedAt?: Date;
   pid?: number;
+  stdinStream?: Writable | null;
 }
 
 export interface SpawnOptions {
