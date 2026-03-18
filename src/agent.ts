@@ -167,9 +167,17 @@ export class JobManager {
       this.addOutput(job, `[cc-agent] Cloned to ${workDir}`);
 
       // 2. Create branch if requested
-      if (job.createBranch) {
-        await execFileAsync("git", ["checkout", "-b", job.createBranch], { cwd: workDir });
-        this.addOutput(job, `[cc-agent] Created branch: ${job.createBranch}`);
+      const branchName = job.createBranch && job.createBranch !== "true" && job.createBranch !== "false"
+        ? job.createBranch
+        : null;
+      if (branchName) {
+        await execFileAsync("git", ["checkout", "-b", branchName], { cwd: workDir });
+        this.addOutput(job, `[cc-agent] Created branch: ${branchName}`);
+      } else if (job.createBranch === "true") {
+        // createBranch=true but no name — generate one from job id
+        const auto = `agent/${job.id.slice(0, 8)}`;
+        await execFileAsync("git", ["checkout", "-b", auto], { cwd: workDir });
+        this.addOutput(job, `[cc-agent] Created branch: ${auto}`);
       }
 
       // 3. Run Claude
