@@ -1,0 +1,37 @@
+{
+  "name": "@gonzih/cc-agent",
+  "version": "0.1.0",
+  "description": "MCP server for spawning Claude Code agents in cloned repos — branch your agents",
+  "type": "module",
+  "bin": {
+    "cc-agent": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "node --loader ts-node/esm src/index.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "files": [
+    "dist/"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "uuid": "^11.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/uuid": "^10.0.0",
+    "typescript": "^5.5.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Gonzih/cc-agent.git"
+  },
+  "homepage": "https://github.com/Gonzih/cc-agent",
+  "bugs": {
+    "url": "https://github.com/Gonzih/cc-agent/issues"
+  },
+  "keywords": ["claude", "claude-code", "mcp", "agent", "ai", "model-context-protocol", "branching-agents"],
+  "license": "MIT"
+}
