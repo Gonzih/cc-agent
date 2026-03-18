@@ -24,6 +24,9 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { JobManager } from "./agent.js";
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
+const { version: PKG_VERSION } = require("../package.json") as { version: string };
 
 const token =
   process.env.CLAUDE_CODE_TOKEN ??
@@ -33,7 +36,7 @@ const token =
 const manager = new JobManager(token);
 
 const server = new Server(
-  { name: "cc-agent", version: "0.1.2" },
+  { name: "cc-agent", version: PKG_VERSION },
   { capabilities: { tools: {} } }
 );
 
@@ -141,6 +144,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
         required: ["job_id", "message"],
       },
+    },
+    {
+      name: "get_version",
+      description: "Returns the running cc-agent MCP server version.",
+      inputSchema: { type: "object", properties: {} },
     },
   ],
 }));
@@ -253,6 +261,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         ],
       };
     }
+
+    case "get_version":
+      return {
+        content: [{ type: "text", text: JSON.stringify({ version: PKG_VERSION }) }],
+      };
 
     default:
       throw new Error(`Unknown tool: ${name}`);
