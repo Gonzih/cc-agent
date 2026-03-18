@@ -17,6 +17,8 @@ export interface Job {
   finishedAt?: Date;
   pid?: number;
   stdinStream?: Writable | null;
+  continueSession?: boolean;
+  maxBudgetUsd?: number;
 }
 
 export interface SpawnOptions {
@@ -25,6 +27,8 @@ export interface SpawnOptions {
   branch?: string;
   createBranch?: string;
   claudeToken?: string;
+  continueSession?: boolean;
+  maxBudgetUsd?: number;
 }
 
 export interface JobSummary {

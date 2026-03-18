@@ -67,6 +67,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             description:
               "Claude OAuth token or Anthropic API key to use for this job (optional — falls back to server env)",
           },
+          continue_session: {
+            type: "boolean",
+            description:
+              "Pass --continue to Claude Code to resume the most recent session in the repo directory (optional, default false)",
+          },
+          max_budget_usd: {
+            type: "number",
+            description:
+              "Maximum USD budget for this Claude Code session (optional, default 20)",
+          },
         },
         required: ["repo_url", "task"],
       },
@@ -147,6 +157,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         branch: a.branch as string | undefined,
         createBranch: a.create_branch as string | undefined,
         claudeToken: a.claude_token as string | undefined,
+        continueSession: a.continue_session as boolean | undefined,
+        maxBudgetUsd: a.max_budget_usd as number | undefined,
       });
       return {
         content: [

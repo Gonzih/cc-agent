@@ -26,7 +26,8 @@ export interface OneShot extends EventEmitter {
 export function runClaude(
   task: string,
   cwd: string,
-  token?: string
+  token?: string,
+  options?: { continueSession?: boolean; maxBudgetUsd?: number }
 ): OneShot & { kill: () => void } {
   const emitter = new EventEmitter() as OneShot & { kill: () => void };
 
@@ -37,8 +38,14 @@ export function runClaude(
     "--output-format", "stream-json",
     "--verbose",
     "--dangerously-skip-permissions",
-    task,
+    "--max-budget-usd", String(options?.maxBudgetUsd ?? 20),
   ];
+
+  if (options?.continueSession) {
+    args.push("--continue");
+  }
+
+  args.push(task);
 
   const env: NodeJS.ProcessEnv = { ...process.env };
   if (token) {

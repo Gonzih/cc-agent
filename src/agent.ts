@@ -133,6 +133,8 @@ export class JobManager {
       task: opts.task,
       branch: opts.branch,
       createBranch: opts.createBranch,
+      continueSession: opts.continueSession,
+      maxBudgetUsd: opts.maxBudgetUsd ?? 20,
       status: "cloning",
       output: [],
       startedAt: new Date(),
@@ -186,7 +188,10 @@ export class JobManager {
       this.addOutput(job, `[cc-agent] Starting Claude with task...`);
 
       await new Promise<void>((resolve, reject) => {
-        const proc = runClaude(job.task, workDir!, token);
+        const proc = runClaude(job.task, workDir!, token, {
+          continueSession: job.continueSession,
+          maxBudgetUsd: job.maxBudgetUsd,
+        });
 
         // Save PID for cross-restart tracking
         if (proc.pid != null) {
