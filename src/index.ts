@@ -207,7 +207,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
     case "get_job_output": {
       const offset = typeof a.offset === "number" ? a.offset : 0;
-      const { lines, done } = manager.getOutput(a.job_id as string, offset);
+      const { lines, done, toolCalls } = manager.getOutput(a.job_id as string, offset);
       return {
         content: [
           {
@@ -218,6 +218,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
               lines,
               next_offset: offset + lines.length,
               done,
+              tool_calls: toolCalls,
             }),
           },
         ],
