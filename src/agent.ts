@@ -252,19 +252,19 @@ export class JobManager {
     return this.jobs.get(id);
   }
 
-  getOutput(id: string, offset = 0): { lines: string[]; done: boolean } {
+  getOutput(id: string, offset = 0): { lines: string[]; done: boolean; toolCalls: string[] } {
     const job = this.jobs.get(id);
     if (!job) {
       // Job not in memory (expired or unknown) — try disk log
       const lines = readLogSync(id, offset);
-      return { lines, done: true };
+      return { lines, done: true, toolCalls: [] };
     }
     const done = job.status === "done" || job.status === "failed" || job.status === "cancelled";
     if (this.diskLoadedJobs.has(id)) {
       // Output lives on disk for jobs recovered after restart
-      return { lines: readLogSync(id, offset), done };
+      return { lines: readLogSync(id, offset), done, toolCalls: job.toolCalls };
     }
-    return { lines: job.output.slice(offset), done };
+    return { lines: job.output.slice(offset), done, toolCalls: job.toolCalls };
   }
 
   list(): JobSummary[] {
