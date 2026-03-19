@@ -63,6 +63,7 @@ export class JobManager {
         createBranch: p.createBranch,
         status,
         output: [],
+        toolCalls: [],
         exitCode: p.exitCode,
         error,
         startedAt: new Date(p.startedAt),
@@ -137,6 +138,7 @@ export class JobManager {
       maxBudgetUsd: opts.maxBudgetUsd ?? 20,
       status: "cloning",
       output: [],
+      toolCalls: [],
       startedAt: new Date(),
     };
     this.jobs.set(id, job);
@@ -206,6 +208,12 @@ export class JobManager {
           if (text.trim()) this.addOutput(job, text);
         });
 
+        proc.on("tool", (name: string) => {
+          job.toolCalls.push(name);
+          // Keep last 50 tool calls to avoid unbounded growth
+          if (job.toolCalls.length > 50) job.toolCalls = job.toolCalls.slice(-50);
+        });
+
         proc.on("error", (err) => {
           reject(err);
         });
@@ -271,6 +279,7 @@ export class JobManager {
       finishedAt: j.finishedAt?.toISOString(),
       exitCode: j.exitCode,
       error: j.error,
+      recentTools: j.toolCalls.slice(-10),
     }));
   }
 

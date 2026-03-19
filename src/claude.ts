@@ -13,6 +13,7 @@ export interface ClaudeMessage {
 export interface OneShot extends EventEmitter {
   on(event: "message", listener: (msg: ClaudeMessage) => void): this;
   on(event: "text", listener: (text: string) => void): this;
+  on(event: "tool", listener: (name: string) => void): this;
   on(event: "error", listener: (err: Error) => void): this;
   on(event: "exit", listener: (code: number | null) => void): this;
   pid?: number;
@@ -79,6 +80,9 @@ export function runClaude(
         if (raw.session_id) msg.session_id = raw.session_id as string;
         emitter.emit("message", msg);
 
+        const toolName = extractToolName(msg);
+        if (toolName) emitter.emit("tool", toolName);
+
         const text = extractText(msg);
         if (text) emitter.emit("text", text);
       } catch {
@@ -118,6 +122,20 @@ function extractText(msg: ClaudeMessage): string {
       .join("");
   }
   return "";
+}
+
+function extractToolName(msg: ClaudeMessage): string | null {
+  const message = msg.payload.message as Record<string, unknown> | undefined;
+  if (!message) return null;
+  const content = message.content;
+  if (Array.isArray(content)) {
+    for (const block of content as Array<Record<string, unknown>>) {
+      if (block.type === "tool_use" && typeof block.name === "string") {
+        return block.name;
+      }
+    }
+  }
+  return null;
 }
 
 function resolveClaude(): string {
