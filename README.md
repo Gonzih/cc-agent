@@ -40,7 +40,7 @@ Restart Claude Code. You now have 7 new MCP tools.
 | `create_branch` | string | no | New branch to create (e.g. `feat/my-feature`) |
 | `claude_token` | string | no | Per-job token override |
 | `continue_session` | boolean | no | Pass `--continue` to resume last Claude session in workdir |
-| `max_budget_usd` | number | no | Spend cap in USD (default: 5). Prevents runaway costs |
+| `max_budget_usd` | number | no | Spend cap in USD (default: 20). Prevents runaway costs |
 
 ## Usage example
 
@@ -80,7 +80,7 @@ On restart, jobs whose processes are still alive are recovered as `running`. Dea
 
 ## Budget control
 
-Set `max_budget_usd` per job to cap spend. Default is $5. Claude Code is killed with SIGTERM when the budget is exhausted (exit code 143).
+Set `max_budget_usd` per job to cap spend. Default is $20. Claude Code is killed with SIGTERM when the budget is exhausted (exit code 143).
 
 ```
 spawn_agent({ ..., max_budget_usd: 10 })  // up to $10 for this task
