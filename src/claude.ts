@@ -61,6 +61,7 @@ export function runClaude(
 
   const proc = spawn(claudeBin, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"], detached: true });
   proc.unref();
+  proc.stdin?.end();
 
   let buffer = "";
 
