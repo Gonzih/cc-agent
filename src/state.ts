@@ -1,9 +1,8 @@
 import { mkdirSync, existsSync, readFileSync, writeFileSync, appendFileSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
 import type { JobStatus } from "./types.js";
 
-export const STATE_DIR = join(homedir(), ".cc-agent");
+export const STATE_DIR = join(process.cwd(), ".cc-agent");
 export const JOBS_FILE = join(STATE_DIR, "jobs.json");
 export const LOGS_DIR = join(STATE_DIR, "jobs");
 
