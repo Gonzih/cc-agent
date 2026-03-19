@@ -10,6 +10,7 @@ export interface Job {
   createBranch?: string;
   status: JobStatus;
   output: string[];
+  toolCalls: string[];
   exitCode?: number;
   error?: string;
   workDir?: string;
@@ -42,4 +43,5 @@ export interface JobSummary {
   finishedAt?: string;
   exitCode?: number;
   error?: string;
+  recentTools?: string[];
 }
