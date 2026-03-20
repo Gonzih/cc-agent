@@ -69,6 +69,9 @@ export class JobManager {
         startedAt: new Date(p.startedAt),
         finishedAt: finishedAt ? new Date(finishedAt) : undefined,
         pid: p.pid,
+        sessionIdAfter: p.sessionIdAfter,
+        usage: p.usage,
+        costUsd: p.costUsd,
       };
 
       this.jobs.set(job.id, job);
@@ -111,6 +114,9 @@ export class JobManager {
       exitCode: job.exitCode,
       error: job.error,
       pid: job.pid,
+      sessionIdAfter: job.sessionIdAfter,
+      usage: job.usage,
+      costUsd: job.costUsd,
     };
     const idx = persisted.findIndex((p) => p.id === job.id);
     if (idx >= 0) {
@@ -136,6 +142,7 @@ export class JobManager {
       createBranch: opts.createBranch,
       continueSession: opts.continueSession,
       maxBudgetUsd: opts.maxBudgetUsd ?? 20,
+      sessionId: opts.sessionId,
       status: "cloning",
       output: [],
       toolCalls: [],
@@ -193,6 +200,7 @@ export class JobManager {
         const proc = runClaude(job.task, workDir!, token, {
           continueSession: job.continueSession,
           maxBudgetUsd: job.maxBudgetUsd,
+          sessionId: job.sessionId,
         });
 
         // Save PID for cross-restart tracking
@@ -203,6 +211,20 @@ export class JobManager {
 
         this.kills.set(job.id, () => proc.kill());
         job.stdinStream = proc.stdin ?? null;
+
+        proc.on("session", (sid: string) => {
+          if (!job.sessionIdAfter) {
+            job.sessionIdAfter = sid;
+            this.persistJob(job);
+          }
+        });
+
+        proc.on("usage", (usage) => {
+          job.usage = usage;
+          const costUsd = (usage.inputTokens * 3 + usage.outputTokens * 15) / 1_000_000;
+          job.costUsd = Math.round(costUsd * 10000) / 10000;
+          this.persistJob(job);
+        });
 
         proc.on("text", (text) => {
           if (text.trim()) this.addOutput(job, text);
@@ -280,6 +302,9 @@ export class JobManager {
       exitCode: j.exitCode,
       error: j.error,
       recentTools: j.toolCalls.slice(-10),
+      sessionIdAfter: j.sessionIdAfter,
+      costUsd: j.costUsd,
+      usage: j.usage,
     }));
   }
 

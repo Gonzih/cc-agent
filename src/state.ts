@@ -1,6 +1,6 @@
 import { mkdirSync, existsSync, readFileSync, writeFileSync, appendFileSync } from "fs";
 import { join } from "path";
-import type { JobStatus } from "./types.js";
+import type { JobStatus, TokenUsage } from "./types.js";
 
 export const STATE_DIR = join(process.cwd(), ".cc-agent");
 export const JOBS_FILE = join(STATE_DIR, "jobs.json");
@@ -18,6 +18,9 @@ export interface PersistedJob {
   exitCode?: number;
   error?: string;
   pid?: number;
+  sessionIdAfter?: string;
+  usage?: TokenUsage;
+  costUsd?: number;
 }
 
 export function ensureStateDirs(): void {
