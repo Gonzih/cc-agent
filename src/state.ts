@@ -25,6 +25,7 @@ export interface PersistedJob {
   totalCacheReadTokens?: number;
   totalCacheWriteTokens?: number;
   costUsd?: number;
+  dependsOn?: string[];
 }
 
 export function ensureStateDirs(): void {
