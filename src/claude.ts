@@ -126,7 +126,7 @@ export function runClaude(
   return emitter;
 }
 
-function extractText(msg: ClaudeMessage): string {
+export function extractText(msg: ClaudeMessage): string {
   if (msg.type === "result") {
     return (msg.payload.result as string) ?? "";
   }
@@ -157,7 +157,7 @@ function extractToolName(msg: ClaudeMessage): string | null {
   return null;
 }
 
-function resolveClaude(): string {
+export function resolveClaude(): string {
   const dirs = (process.env.PATH ?? "").split(":");
   for (const dir of dirs) {
     const c = `${dir}/claude`;
