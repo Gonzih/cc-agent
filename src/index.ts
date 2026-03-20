@@ -86,6 +86,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             description:
               "Session ID to resume from a previous job (use sessionIdAfter from a prior job). Passes --continue to Claude CLI.",
           },
+          depends_on: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "Job IDs that must be done before this job starts. Job will be queued as pending until all dependencies complete.",
+          },
         },
         required: ["repo_url", "task"],
       },
@@ -213,6 +219,52 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "create_plan",
+      description:
+        "Spawn a full dependency graph of agent jobs in one call. Each step can declare depends_on referencing other step IDs in this plan. Returns a summary with actual job IDs mapped to step IDs.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          goal: {
+            type: "string",
+            description: "High-level description of what this plan achieves",
+          },
+          steps: {
+            type: "array",
+            description: "Ordered list of steps to execute",
+            items: {
+              type: "object",
+              properties: {
+                id: {
+                  type: "string",
+                  description: "Logical step ID used for depends_on references within this plan",
+                },
+                repo_url: {
+                  type: "string",
+                  description: "Git repository URL to clone",
+                },
+                task: {
+                  type: "string",
+                  description: "Task description to pass to Claude Code",
+                },
+                create_branch: {
+                  type: "string",
+                  description: "New branch name to create before running the task (optional)",
+                },
+                depends_on: {
+                  type: "array",
+                  items: { type: "string" },
+                  description: "Step IDs (from this plan) that must complete before this step starts",
+                },
+              },
+              required: ["id", "repo_url", "task"],
+            },
+          },
+        },
+        required: ["goal", "steps"],
+      },
+    },
+    {
       name: "spawn_from_profile",
       description: "Spawn an agent job from a saved profile. Supports variable interpolation and per-call overrides.",
       inputSchema: {
@@ -261,6 +313,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         continueSession: a.continue_session as boolean | undefined,
         maxBudgetUsd: a.max_budget_usd as number | undefined,
         sessionId: a.session_id as string | undefined,
+        dependsOn: a.depends_on as string[] | undefined,
       });
       return {
         content: [
@@ -459,6 +512,53 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           {
             type: "text",
             text: JSON.stringify({ job_id: jobId, status: "started", profile: a.profile_name, message: "Agent spawned. Use get_job_output to follow progress." }),
+          },
+        ],
+      };
+    }
+
+    case "create_plan": {
+      const goal = a.goal as string;
+      const steps = a.steps as Array<{
+        id: string;
+        repo_url: string;
+        task: string;
+        create_branch?: string;
+        depends_on?: string[];
+      }>;
+
+      // Map logical step IDs → actual job IDs as we spawn in order
+      const stepIdToJobId = new Map<string, string>();
+      const results: Array<{ stepId: string; jobId: string; status: string }> = [];
+
+      for (const step of steps) {
+        const resolvedDeps = step.depends_on?.map((sid) => {
+          const jobId = stepIdToJobId.get(sid);
+          if (!jobId) throw new Error(`Step '${step.id}' depends_on unknown step '${sid}'`);
+          return jobId;
+        });
+
+        const jobId = await manager.spawn({
+          repoUrl: step.repo_url,
+          task: step.task,
+          createBranch: step.create_branch,
+          dependsOn: resolvedDeps,
+        });
+
+        stepIdToJobId.set(step.id, jobId);
+        results.push({ stepId: step.id, jobId, status: resolvedDeps?.length ? "pending" : "cloning" });
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              goal,
+              totalSteps: steps.length,
+              steps: results,
+              message: "Plan created. Jobs with dependencies will start automatically when their dependencies complete.",
+            }),
           },
         ],
       };

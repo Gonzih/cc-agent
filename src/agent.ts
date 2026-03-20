@@ -50,6 +50,8 @@ export class JobManager {
     setInterval(() => this.cleanup(), 5 * 60 * 1000).unref();
     // Periodic check for disk-loaded running jobs whose PID may have died
     setInterval(() => this.checkDiskLoadedRunning(), 30 * 1000).unref();
+    // Dependency scheduler — promote pending jobs when deps are done
+    setInterval(() => this.tick(), 3000).unref();
   }
 
   private loadFromDisk(): void {
@@ -92,6 +94,7 @@ export class JobManager {
         totalCacheReadTokens: p.totalCacheReadTokens,
         totalCacheWriteTokens: p.totalCacheWriteTokens,
         costUsd: p.costUsd,
+        dependsOn: p.dependsOn,
       };
 
       this.jobs.set(job.id, job);
@@ -141,6 +144,7 @@ export class JobManager {
       totalCacheReadTokens: job.totalCacheReadTokens,
       totalCacheWriteTokens: job.totalCacheWriteTokens,
       costUsd: job.costUsd,
+      dependsOn: job.dependsOn,
     };
     const idx = persisted.findIndex((p) => p.id === job.id);
     if (idx >= 0) {
@@ -158,6 +162,11 @@ export class JobManager {
 
   async spawn(opts: SpawnOptions): Promise<string> {
     const id = uuidv4();
+    const pendingDeps = opts.dependsOn?.filter((depId) => {
+      const dep = this.jobs.get(depId);
+      return dep?.status !== "done";
+    });
+    const isPending = pendingDeps && pendingDeps.length > 0;
     const job: Job = {
       id,
       repoUrl: opts.repoUrl,
@@ -167,7 +176,9 @@ export class JobManager {
       continueSession: opts.continueSession,
       maxBudgetUsd: opts.maxBudgetUsd ?? 20,
       sessionId: opts.sessionId,
-      status: "cloning",
+      claudeToken: opts.claudeToken,
+      dependsOn: opts.dependsOn,
+      status: isPending ? "pending" : "cloning",
       output: [],
       toolCalls: [],
       startedAt: new Date(),
@@ -175,13 +186,15 @@ export class JobManager {
     this.jobs.set(id, job);
     this.persistJob(job);
 
-    // Run async — don't await
-    this.run(job, opts.claudeToken ?? this.defaultToken).catch((err) => {
-      job.status = "failed";
-      job.error = String(err);
-      job.finishedAt = new Date();
-      this.persistJob(job);
-    });
+    if (!isPending) {
+      // Run async — don't await
+      this.run(job, opts.claudeToken ?? this.defaultToken).catch((err) => {
+        job.status = "failed";
+        job.error = String(err);
+        job.finishedAt = new Date();
+        this.persistJob(job);
+      });
+    }
 
     return id;
   }
@@ -297,6 +310,38 @@ export class JobManager {
     }
   }
 
+  private tick(): void {
+    for (const [, job] of this.jobs) {
+      if (job.status !== "pending") continue;
+      if (!job.dependsOn?.length) { this.promote(job); continue; }
+      const allDone = job.dependsOn.every((depId) => {
+        const dep = this.jobs.get(depId);
+        return dep?.status === "done";
+      });
+      const anyFailed = job.dependsOn.some((depId) => {
+        const dep = this.jobs.get(depId);
+        return dep?.status === "failed" || dep?.status === "cancelled";
+      });
+      if (anyFailed) {
+        job.status = "failed";
+        job.error = "Dependency failed";
+        job.finishedAt = new Date();
+        this.persistJob(job);
+      } else if (allDone) {
+        this.promote(job);
+      }
+    }
+  }
+
+  private promote(job: Job): void {
+    this.run(job, job.claudeToken ?? this.defaultToken).catch((err) => {
+      job.status = "failed";
+      job.error = String(err);
+      job.finishedAt = new Date();
+      this.persistJob(job);
+    });
+  }
+
   getJob(id: string): Job | undefined {
     return this.jobs.get(id);
   }
@@ -353,7 +398,7 @@ export class JobManager {
   cancel(id: string): boolean {
     const job = this.jobs.get(id);
     if (!job) return false;
-    if (job.status !== "cloning" && job.status !== "running") return false;
+    if (job.status !== "pending" && job.status !== "cloning" && job.status !== "running") return false;
 
     const kill = this.kills.get(id);
     if (kill) {

@@ -1,6 +1,6 @@
 import type { Writable } from "stream";
 
-export type JobStatus = "cloning" | "running" | "done" | "failed" | "cancelled";
+export type JobStatus = "pending" | "cloning" | "running" | "done" | "failed" | "cancelled";
 
 export interface TokenUsage {
   inputTokens: number;
@@ -35,6 +35,8 @@ export interface Job {
   totalCacheReadTokens?: number;
   totalCacheWriteTokens?: number;
   costUsd?: number;
+  dependsOn?: string[];
+  claudeToken?: string;
 }
 
 export interface SpawnOptions {
@@ -46,6 +48,7 @@ export interface SpawnOptions {
   continueSession?: boolean;
   maxBudgetUsd?: number;
   sessionId?: string;
+  dependsOn?: string[];
 }
 
 export interface JobSummary {
