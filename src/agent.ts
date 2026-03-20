@@ -20,6 +20,22 @@ const execFileAsync = promisify(execFile);
 
 const JOB_TTL_MS = 60 * 60 * 1000; // 1 hour — clean up old done jobs
 
+// Claude Sonnet 4.6 pricing (USD per 1M tokens)
+const PRICE_INPUT = 3.00;
+const PRICE_OUTPUT = 15.00;
+const PRICE_CACHE_READ = 0.30;
+const PRICE_CACHE_WRITE = 3.75;
+
+function calculateCost(job: Job): number {
+  const cost =
+    ((job.totalInputTokens ?? 0) * PRICE_INPUT +
+      (job.totalOutputTokens ?? 0) * PRICE_OUTPUT +
+      (job.totalCacheReadTokens ?? 0) * PRICE_CACHE_READ +
+      (job.totalCacheWriteTokens ?? 0) * PRICE_CACHE_WRITE) /
+    1_000_000;
+  return Math.round(cost * 10000) / 10000;
+}
+
 export class JobManager {
   private jobs = new Map<string, Job>();
   private kills = new Map<string, () => void>();
@@ -71,6 +87,10 @@ export class JobManager {
         pid: p.pid,
         sessionIdAfter: p.sessionIdAfter,
         usage: p.usage,
+        totalInputTokens: p.totalInputTokens,
+        totalOutputTokens: p.totalOutputTokens,
+        totalCacheReadTokens: p.totalCacheReadTokens,
+        totalCacheWriteTokens: p.totalCacheWriteTokens,
         costUsd: p.costUsd,
       };
 
@@ -116,6 +136,10 @@ export class JobManager {
       pid: job.pid,
       sessionIdAfter: job.sessionIdAfter,
       usage: job.usage,
+      totalInputTokens: job.totalInputTokens,
+      totalOutputTokens: job.totalOutputTokens,
+      totalCacheReadTokens: job.totalCacheReadTokens,
+      totalCacheWriteTokens: job.totalCacheWriteTokens,
       costUsd: job.costUsd,
     };
     const idx = persisted.findIndex((p) => p.id === job.id);
@@ -219,10 +243,13 @@ export class JobManager {
           }
         });
 
-        proc.on("usage", (usage) => {
-          job.usage = usage;
-          const costUsd = (usage.inputTokens * 3 + usage.outputTokens * 15) / 1_000_000;
-          job.costUsd = Math.round(costUsd * 10000) / 10000;
+        proc.on("usage", (u) => {
+          job.totalInputTokens = (job.totalInputTokens ?? 0) + u.inputTokens;
+          job.totalOutputTokens = (job.totalOutputTokens ?? 0) + u.outputTokens;
+          job.totalCacheReadTokens = (job.totalCacheReadTokens ?? 0) + (u.cacheReadTokens ?? 0);
+          job.totalCacheWriteTokens = (job.totalCacheWriteTokens ?? 0) + (u.cacheWriteTokens ?? 0);
+          // Prefer authoritative cost_usd from CLI result; fall back to calculated
+          job.costUsd = u.costUsd != null ? u.costUsd : calculateCost(job);
           this.persistJob(job);
         });
 
@@ -305,6 +332,10 @@ export class JobManager {
       sessionIdAfter: j.sessionIdAfter,
       costUsd: j.costUsd,
       usage: j.usage,
+      totalInputTokens: j.totalInputTokens,
+      totalOutputTokens: j.totalOutputTokens,
+      totalCacheReadTokens: j.totalCacheReadTokens,
+      totalCacheWriteTokens: j.totalCacheWriteTokens,
     }));
   }
 

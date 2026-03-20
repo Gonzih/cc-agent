@@ -10,12 +10,20 @@ export interface ClaudeMessage {
   payload: Record<string, unknown>;
 }
 
+export interface UsageEvent {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  costUsd?: number;
+}
+
 export interface OneShot extends EventEmitter {
   on(event: "message", listener: (msg: ClaudeMessage) => void): this;
   on(event: "text", listener: (text: string) => void): this;
   on(event: "tool", listener: (name: string) => void): this;
   on(event: "session", listener: (sessionId: string) => void): this;
-  on(event: "usage", listener: (usage: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheCreationTokens?: number }) => void): this;
+  on(event: "usage", listener: (usage: UsageEvent) => void): this;
   on(event: "error", listener: (err: Error) => void): this;
   on(event: "exit", listener: (code: number | null) => void): this;
   pid?: number;
@@ -88,14 +96,35 @@ export function runClaude(
           emitter.emit("session", raw.session_id);
         }
 
-        // Emit usage from result messages
-        if (raw.type === "result" && raw.usage) {
+        // Emit usage from message_start (input tokens for this turn)
+        if (raw.type === "message_start") {
+          const message = raw.message as Record<string, unknown> | undefined;
+          if (message?.usage) {
+            const u = message.usage as Record<string, unknown>;
+            emitter.emit("usage", {
+              inputTokens: (u.input_tokens as number) ?? 0,
+              outputTokens: (u.output_tokens as number) ?? 0,
+              cacheReadTokens: (u.cache_read_input_tokens as number) ?? 0,
+              cacheWriteTokens: (u.cache_creation_input_tokens as number) ?? 0,
+            });
+          }
+        }
+
+        // Emit usage from message_delta (output tokens for this turn)
+        if (raw.type === "message_delta" && raw.usage) {
           const u = raw.usage as Record<string, unknown>;
           emitter.emit("usage", {
-            inputTokens: (u.input_tokens as number) ?? 0,
+            inputTokens: 0,
             outputTokens: (u.output_tokens as number) ?? 0,
-            cacheReadTokens: (u.cache_read_tokens as number) ?? 0,
-            cacheCreationTokens: (u.cache_creation_tokens as number) ?? 0,
+          });
+        }
+
+        // Emit cost_usd from result if provided
+        if (raw.type === "result" && raw.cost_usd != null) {
+          emitter.emit("usage", {
+            inputTokens: 0,
+            outputTokens: 0,
+            costUsd: raw.cost_usd as number,
           });
         }
 

@@ -30,6 +30,10 @@ export interface Job {
   sessionId?: string;
   sessionIdAfter?: string;
   usage?: TokenUsage;
+  totalInputTokens?: number;
+  totalOutputTokens?: number;
+  totalCacheReadTokens?: number;
+  totalCacheWriteTokens?: number;
   costUsd?: number;
 }
 
@@ -59,4 +63,8 @@ export interface JobSummary {
   sessionIdAfter?: string;
   costUsd?: number;
   usage?: TokenUsage;
+  totalInputTokens?: number;
+  totalOutputTokens?: number;
+  totalCacheReadTokens?: number;
+  totalCacheWriteTokens?: number;
 }
