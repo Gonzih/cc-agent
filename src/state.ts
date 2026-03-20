@@ -20,6 +20,10 @@ export interface PersistedJob {
   pid?: number;
   sessionIdAfter?: string;
   usage?: TokenUsage;
+  totalInputTokens?: number;
+  totalOutputTokens?: number;
+  totalCacheReadTokens?: number;
+  totalCacheWriteTokens?: number;
   costUsd?: number;
 }
 
