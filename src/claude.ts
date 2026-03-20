@@ -14,6 +14,8 @@ export interface OneShot extends EventEmitter {
   on(event: "message", listener: (msg: ClaudeMessage) => void): this;
   on(event: "text", listener: (text: string) => void): this;
   on(event: "tool", listener: (name: string) => void): this;
+  on(event: "session", listener: (sessionId: string) => void): this;
+  on(event: "usage", listener: (usage: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheCreationTokens?: number }) => void): this;
   on(event: "error", listener: (err: Error) => void): this;
   on(event: "exit", listener: (code: number | null) => void): this;
   pid?: number;
@@ -28,7 +30,7 @@ export function runClaude(
   task: string,
   cwd: string,
   token?: string,
-  options?: { continueSession?: boolean; maxBudgetUsd?: number }
+  options?: { continueSession?: boolean; maxBudgetUsd?: number; sessionId?: string }
 ): OneShot & { kill: () => void } {
   const emitter = new EventEmitter() as OneShot & { kill: () => void };
 
@@ -42,7 +44,7 @@ export function runClaude(
     "--max-budget-usd", String(options?.maxBudgetUsd ?? 20),
   ];
 
-  if (options?.continueSession) {
+  if (options?.continueSession || options?.sessionId) {
     args.push("--continue");
   }
 
@@ -80,6 +82,22 @@ export function runClaude(
         const msg: ClaudeMessage = { type, payload: raw };
         if (raw.session_id) msg.session_id = raw.session_id as string;
         emitter.emit("message", msg);
+
+        // Emit session ID on first occurrence
+        if (raw.session_id && typeof raw.session_id === "string") {
+          emitter.emit("session", raw.session_id);
+        }
+
+        // Emit usage from result messages
+        if (raw.type === "result" && raw.usage) {
+          const u = raw.usage as Record<string, unknown>;
+          emitter.emit("usage", {
+            inputTokens: (u.input_tokens as number) ?? 0,
+            outputTokens: (u.output_tokens as number) ?? 0,
+            cacheReadTokens: (u.cache_read_tokens as number) ?? 0,
+            cacheCreationTokens: (u.cache_creation_tokens as number) ?? 0,
+          });
+        }
 
         const toolName = extractToolName(msg);
         if (toolName) emitter.emit("tool", toolName);

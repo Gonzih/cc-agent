@@ -80,6 +80,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             description:
               "Maximum USD budget for this Claude Code session (optional, default 20)",
           },
+          session_id: {
+            type: "string",
+            description:
+              "Session ID to resume from a previous job (use sessionIdAfter from a prior job). Passes --continue to Claude CLI.",
+          },
         },
         required: ["repo_url", "task"],
       },
@@ -146,6 +151,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "cost_summary",
+      description: "Returns total USD cost across all jobs, broken down by repo.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
       name: "get_version",
       description: "Returns the running cc-agent MCP server version.",
       inputSchema: { type: "object", properties: {} },
@@ -167,6 +177,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         claudeToken: a.claude_token as string | undefined,
         continueSession: a.continue_session as boolean | undefined,
         maxBudgetUsd: a.max_budget_usd as number | undefined,
+        sessionId: a.session_id as string | undefined,
       });
       return {
         content: [
@@ -199,6 +210,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
               exit_code: job.exitCode,
               error: job.error,
               output_lines: job.output.length,
+              session_id_after: job.sessionIdAfter,
+              cost_usd: job.costUsd,
+              usage: job.usage,
             }),
           },
         ],
@@ -258,6 +272,29 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             text: JSON.stringify(result.ok
               ? { job_id: a.job_id, sent: true, message: "Message delivered to agent stdin." }
               : { job_id: a.job_id, sent: false, error: result.error }),
+          },
+        ],
+      };
+    }
+
+    case "cost_summary": {
+      const jobs = manager.list();
+      const totalCostUsd = jobs.reduce((sum, j) => sum + (j.costUsd ?? 0), 0);
+      const byRepo: Record<string, number> = {};
+      for (const j of jobs) {
+        if (j.costUsd) {
+          byRepo[j.repoUrl] = Math.round(((byRepo[j.repoUrl] ?? 0) + j.costUsd) * 10000) / 10000;
+        }
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              totalJobs: jobs.length,
+              totalCostUsd: Math.round(totalCostUsd * 10000) / 10000,
+              byRepo,
+            }),
           },
         ],
       };
