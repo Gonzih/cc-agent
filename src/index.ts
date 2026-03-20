@@ -24,6 +24,7 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { JobManager } from "./agent.js";
+import { loadProfiles, upsertProfile, deleteProfile, getProfile, interpolate } from "./profiles.js";
 import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 const { version: PKG_VERSION } = require("../package.json") as { version: string };
@@ -150,6 +151,88 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       description: "Returns the running cc-agent MCP server version.",
       inputSchema: { type: "object", properties: {} },
     },
+    {
+      name: "create_profile",
+      description:
+        "Save a named spawn config (profile) for repeated use. Task templates support {{variable}} substitution.\n\n// Create once:\n// create_profile('fix-bugs', 'https://github.com/me/app', 'Fix {{issue}}: {{title}}', 5)\n// Use many times:\n// spawn_from_profile('fix-bugs', { issue: '42', title: 'Login broken' })",
+      inputSchema: {
+        type: "object",
+        properties: {
+          name: {
+            type: "string",
+            description: "Profile name (alphanumeric, dash, underscore only)",
+          },
+          repo_url: {
+            type: "string",
+            description: "Git repository URL to clone",
+          },
+          task_template: {
+            type: "string",
+            description: "Task description template; use {{varName}} for substitution",
+          },
+          default_budget_usd: {
+            type: "number",
+            description: "Default USD budget for jobs spawned from this profile (optional)",
+          },
+          branch: {
+            type: "string",
+            description: "Branch to checkout after cloning (optional)",
+          },
+          description: {
+            type: "string",
+            description: "Human-readable description of this profile (optional)",
+          },
+        },
+        required: ["name", "repo_url", "task_template"],
+      },
+    },
+    {
+      name: "list_profiles",
+      description: "List all saved named job profiles.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "delete_profile",
+      description: "Delete a named job profile.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Profile name to delete" },
+        },
+        required: ["name"],
+      },
+    },
+    {
+      name: "spawn_from_profile",
+      description: "Spawn an agent job from a saved profile. Supports variable interpolation and per-call overrides.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          profile_name: {
+            type: "string",
+            description: "Name of the profile to use",
+          },
+          vars: {
+            type: "object",
+            description: "Variables to interpolate into the task template (e.g. { issue: '42', title: 'Login broken' })",
+            additionalProperties: { type: "string" },
+          },
+          task_override: {
+            type: "string",
+            description: "Use this task instead of the profile's template (optional)",
+          },
+          branch_override: {
+            type: "string",
+            description: "Override the profile's branch (optional)",
+          },
+          budget_override: {
+            type: "number",
+            description: "Override the profile's default budget (optional)",
+          },
+        },
+        required: ["profile_name"],
+      },
+    },
   ],
 }));
 
@@ -267,6 +350,82 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       return {
         content: [{ type: "text", text: JSON.stringify({ version: PKG_VERSION }) }],
       };
+
+    case "create_profile": {
+      const name = a.name as string;
+      if (!/^[\w-]+$/.test(name)) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ error: "Profile name must be alphanumeric with dashes/underscores only" }) }],
+        };
+      }
+      upsertProfile({
+        name,
+        repoUrl: a.repo_url as string,
+        taskTemplate: a.task_template as string,
+        defaultBudgetUsd: a.default_budget_usd as number | undefined,
+        branch: a.branch as string | undefined,
+        description: a.description as string | undefined,
+        createdAt: new Date().toISOString(),
+      });
+      return {
+        content: [{ type: "text", text: JSON.stringify({ ok: true, message: `Profile '${name}' saved.` }) }],
+      };
+    }
+
+    case "list_profiles": {
+      const profiles = loadProfiles().map(({ name, repoUrl, description, defaultBudgetUsd }) => ({
+        name,
+        repoUrl,
+        description,
+        defaultBudgetUsd,
+      }));
+      return {
+        content: [{ type: "text", text: JSON.stringify({ profiles, total: profiles.length }) }],
+      };
+    }
+
+    case "delete_profile": {
+      const deleted = deleteProfile(a.name as string);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              deleted
+                ? { ok: true, message: `Profile '${a.name}' deleted.` }
+                : { error: `Profile '${a.name}' not found.` }
+            ),
+          },
+        ],
+      };
+    }
+
+    case "spawn_from_profile": {
+      const profile = getProfile(a.profile_name as string);
+      if (!profile) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ error: `Profile '${a.profile_name}' not found.` }) }],
+        };
+      }
+      const vars = (a.vars ?? {}) as Record<string, string>;
+      const task = a.task_override
+        ? (a.task_override as string)
+        : interpolate(profile.taskTemplate, vars);
+      const jobId = await manager.spawn({
+        repoUrl: profile.repoUrl,
+        task,
+        branch: (a.branch_override as string | undefined) ?? profile.branch,
+        maxBudgetUsd: (a.budget_override as number | undefined) ?? profile.defaultBudgetUsd,
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ job_id: jobId, status: "started", profile: a.profile_name, message: "Agent spawned. Use get_job_output to follow progress." }),
+          },
+        ],
+      };
+    }
 
     default:
       throw new Error(`Unknown tool: ${name}`);
