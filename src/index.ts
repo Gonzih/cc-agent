@@ -25,9 +25,13 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { JobManager } from "./agent.js";
 import { loadProfiles, upsertProfile, deleteProfile, getProfile, interpolate } from "./profiles.js";
-import { planStore } from "./store.js";
+import { planStore, jobStore } from "./store.js";
 import { initRedis } from "./redis.js";
+import { logger } from "./logger.js";
 import { v4 as uuidv4 } from "uuid";
+import { existsSync, readFileSync } from "fs";
+import { join } from "path";
+import { homedir } from "os";
 import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 const { version: PKG_VERSION } = require("../package.json") as { version: string };
@@ -272,6 +276,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "get_logs",
+      description: "Return the last N lines of the cc-agent log file (~/.cc-agent/logs/cc-agent.log). Default 100, max 500.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          lines: {
+            type: "number",
+            description: "Number of log lines to return (default 100, max 500)",
+          },
+        },
+      },
+    },
+    {
       name: "spawn_from_profile",
       description: "Spawn an agent job from a saved profile. Supports variable interpolation and per-call overrides.",
       inputSchema: {
@@ -311,6 +328,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
   switch (name) {
     case "spawn_agent": {
+      logger.info("tool:spawn_agent", { repo_url: a.repo_url, task: (a.task as string)?.slice(0, 80) });
       const jobId = await manager.spawn({
         repoUrl: a.repo_url as string,
         task: a.task as string,
@@ -333,6 +351,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "get_job_status": {
+      logger.info("tool:get_job_status", { job_id: a.job_id });
       const job = manager.getJob(a.job_id as string);
       if (!job) {
         return { content: [{ type: "text", text: JSON.stringify({ error: "Job not found" }) }] };
@@ -363,6 +382,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "get_job_output": {
+      logger.info("tool:get_job_output", { job_id: a.job_id, offset: a.offset });
       const offset = typeof a.offset === "number" ? a.offset : 0;
       const { lines, done, toolCalls } = await manager.getOutput(a.job_id as string, offset);
       return {
@@ -383,7 +403,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "list_jobs": {
-      const jobs = manager.list();
+      logger.info("tool:list_jobs");
+      const jobs = (await jobStore.listJobs()) ?? [];
       return {
         content: [
           {
@@ -395,6 +416,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "cancel_job": {
+      logger.info("tool:cancel_job", { job_id: a.job_id });
       const cancelled = manager.cancel(a.job_id as string);
       return {
         content: [
@@ -407,6 +429,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "send_message": {
+      logger.info("tool:send_message", { job_id: a.job_id });
       const result = manager.sendMessage(a.job_id as string, a.message as string);
       return {
         content: [
@@ -421,6 +444,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "cost_summary": {
+      logger.info("tool:cost_summary");
       const jobs = manager.list();
       const totalCostUsd = jobs.reduce((sum, j) => sum + (j.costUsd ?? 0), 0);
       const byRepo: Record<string, number> = {};
@@ -444,11 +468,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "get_version":
+      logger.info("tool:get_version");
       return {
         content: [{ type: "text", text: JSON.stringify({ version: PKG_VERSION }) }],
       };
 
     case "create_profile": {
+      logger.info("tool:create_profile", { name: a.name });
       const profileName = a.name as string;
       if (!/^[\w-]+$/.test(profileName)) {
         return {
@@ -471,6 +497,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "list_profiles": {
+      logger.info("tool:list_profiles");
       const profiles = (await loadProfiles()).map(({ name, repoUrl, description, defaultBudgetUsd }) => ({
         name,
         repoUrl,
@@ -483,6 +510,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "delete_profile": {
+      logger.info("tool:delete_profile", { name: a.name });
       const deleted = await deleteProfile(a.name as string);
       return {
         content: [
@@ -499,6 +527,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "spawn_from_profile": {
+      logger.info("tool:spawn_from_profile", { profile_name: a.profile_name });
       const profile = await getProfile(a.profile_name as string);
       if (!profile) {
         return {
@@ -527,6 +556,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "create_plan": {
+      logger.info("tool:create_plan", { goal: (a.goal as string)?.slice(0, 80) });
       const goal = a.goal as string;
       const steps = a.steps as Array<{
         id: string;
@@ -574,6 +604,23 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             }),
           },
         ],
+      };
+    }
+
+    case "get_logs": {
+      logger.info("tool:get_logs", { lines: a.lines });
+      const n = Math.min(typeof a.lines === "number" ? a.lines : 100, 500);
+      const logFile = join(homedir(), ".cc-agent", "logs", "cc-agent.log");
+      let lines: string[] = [];
+      try {
+        if (existsSync(logFile)) {
+          const content = readFileSync(logFile, "utf-8");
+          lines = content.split("\n").filter((l) => l.length > 0);
+          lines = lines.slice(-n);
+        }
+      } catch {}
+      return {
+        content: [{ type: "text", text: JSON.stringify({ lines, total: lines.length }) }],
       };
     }
 

@@ -10,6 +10,7 @@ import {
   type PersistedJob,
 } from "./state.js";
 import type { JobStatus, TokenUsage } from "./types.js";
+import { logger } from "./logger.js";
 
 const JOB_TTL_SECONDS = 7 * 24 * 60 * 60;   // 7 days
 const PLAN_TTL_SECONDS = 30 * 24 * 60 * 60;  // 30 days
@@ -66,9 +67,10 @@ export class JobStore {
         await redis.set(`cca:job:${record.id}`, JSON.stringify(record), "EX", JOB_TTL_SECONDS);
         await redis.lpush("cca:jobs:index", record.id);
         await redis.ltrim("cca:jobs:index", 0, 499);
+        logger.info("store:saveJob", { id: record.id, status: record.status });
         return;
       } catch (err) {
-        console.error("[cc-agent] Redis saveJob failed:", err);
+        logger.error("store:saveJob Redis failed", err);
       }
     }
     this.memJobs.set(record.id, record);
@@ -82,7 +84,7 @@ export class JobStore {
         const raw = await redis.get(`cca:job:${id}`);
         return raw ? (JSON.parse(raw) as JobRecord) : null;
       } catch (err) {
-        console.error("[cc-agent] Redis getJob failed:", err);
+        logger.error("store:getJob Redis failed", err);
       }
     }
     return this.memJobs.get(id) ?? null;
@@ -105,7 +107,7 @@ export class JobStore {
         }
         return jobs;
       } catch (err) {
-        console.error("[cc-agent] Redis listJobs failed:", err);
+        logger.error("store:listJobs Redis failed", err);
       }
     }
     return Array.from(this.memJobs.values());
@@ -120,7 +122,7 @@ export class JobStore {
         await redis.expire(key, JOB_TTL_SECONDS);
         return;
       } catch (err) {
-        console.error("[cc-agent] Redis appendOutput failed:", err);
+        logger.error("store:appendOutput Redis failed", err);
       }
     }
     appendLog(id, line);
@@ -132,7 +134,7 @@ export class JobStore {
       try {
         return await redis.lrange(`cca:job:${id}:output`, offset, -1);
       } catch (err) {
-        console.error("[cc-agent] Redis getOutput failed:", err);
+        logger.error("store:getOutput Redis failed", err);
       }
     }
     return readLogSync(id, offset);
@@ -153,7 +155,7 @@ export class JobStore {
         const jobs = await this.listJobs();
         if (jobs.length > 0) return jobs;
       } catch (err) {
-        console.error("[cc-agent] Redis loadAll failed:", err);
+        logger.error("store:loadAll Redis failed", err);
       }
     }
     return loadPersistedJobs().map((p) => ({
@@ -188,7 +190,7 @@ export class JobStore {
       }));
       savePersistedJobs(records);
     } catch (err) {
-      console.error("[cc-agent] Disk sync failed:", err);
+      logger.error("store:flushToDisk failed", err);
     }
   }
 }
@@ -215,7 +217,7 @@ export class ProfileStore {
         await redis.sadd("cca:profiles:index", profile.name);
         return;
       } catch (err) {
-        console.error("[cc-agent] Redis saveProfile failed:", err);
+        logger.error("store:saveProfile Redis failed", err);
       }
     }
     const profiles = diskLoadProfiles();
@@ -231,7 +233,7 @@ export class ProfileStore {
         const raw = await redis.get(`cca:profile:${name}`);
         return raw ? (JSON.parse(raw) as Profile) : null;
       } catch (err) {
-        console.error("[cc-agent] Redis getProfile failed:", err);
+        logger.error("store:getProfile Redis failed", err);
       }
     }
     return diskLoadProfiles().find((p) => p.name === name) ?? null;
@@ -259,7 +261,7 @@ export class ProfileStore {
         }
         return profiles.sort((a, b) => a.name.localeCompare(b.name));
       } catch (err) {
-        console.error("[cc-agent] Redis listProfiles failed:", err);
+        logger.error("store:listProfiles Redis failed", err);
       }
     }
     return diskLoadProfiles();
@@ -273,7 +275,7 @@ export class ProfileStore {
         await redis.srem("cca:profiles:index", name);
         return deleted > 0;
       } catch (err) {
-        console.error("[cc-agent] Redis deleteProfile failed:", err);
+        logger.error("store:deleteProfile Redis failed", err);
       }
     }
     const profiles = diskLoadProfiles();
@@ -302,7 +304,7 @@ export class PlanStore {
         await redis.set(`cca:plan:${plan.id}`, JSON.stringify(plan), "EX", PLAN_TTL_SECONDS);
         return;
       } catch (err) {
-        console.error("[cc-agent] Redis savePlan failed:", err);
+        logger.error("store:savePlan Redis failed", err);
       }
     }
     // No disk fallback for plans — they are best-effort metadata
@@ -315,7 +317,7 @@ export class PlanStore {
         const raw = await redis.get(`cca:plan:${id}`);
         return raw ? (JSON.parse(raw) as PlanRecord) : null;
       } catch (err) {
-        console.error("[cc-agent] Redis getPlan failed:", err);
+        logger.error("store:getPlan Redis failed", err);
       }
     }
     return null;
