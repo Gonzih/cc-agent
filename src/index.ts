@@ -46,6 +46,23 @@ const token =
   process.env.CLAUDE_CODE_OAUTH_TOKEN ??
   process.env.ANTHROPIC_API_KEY;
 
+/** Trusted GitHub owners who can trigger jobs without approval. */
+const TRUSTED_OWNERS: string[] = (process.env.CC_AGENT_TRUSTED_OWNERS ?? "gonzih")
+  .split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
+
+/** Extract the GitHub owner from a repo URL (https or ssh). Returns null if not parseable. */
+function extractGithubOwner(repoUrl: string): string | null {
+  // https://github.com/owner/repo or https://github.com/owner/repo.git
+  const httpsMatch = repoUrl.match(/github\.com\/([^/]+)\//);
+  if (httpsMatch) return httpsMatch[1];
+  // git@github.com:owner/repo.git
+  const sshMatch = repoUrl.match(/github\.com:([^/]+)\//);
+  if (sshMatch) return sshMatch[1];
+  return null;
+}
+
 const manager = new JobManager(token);
 
 const server = new Server(
@@ -378,6 +395,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "approve_job",
+      description: "Approve a job that is pending approval due to an untrusted repo owner. Transitions the job from pending_approval to running.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          job_id: { type: "string", description: "Job ID of the pending_approval job to approve" },
+        },
+        required: ["job_id"],
+      },
+    },
+    {
       name: "spawn_from_profile",
       description: "Spawn an agent job from a saved profile. Supports variable interpolation and per-call overrides.",
       inputSchema: {
@@ -417,9 +445,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
   switch (name) {
     case "spawn_agent": {
-      logger.info("tool:spawn_agent", { repo_url: a.repo_url, task: (a.task as string)?.slice(0, 80) });
+      const repoUrl = a.repo_url as string;
+      logger.info("tool:spawn_agent", { repo_url: repoUrl, task: (a.task as string)?.slice(0, 80) });
+
+      const owner = extractGithubOwner(repoUrl);
+      const isTrusted = !owner || TRUSTED_OWNERS.includes(owner);
+
       const jobId = await manager.spawn({
-        repoUrl: a.repo_url as string,
+        repoUrl,
         task: a.task as string,
         branch: a.branch as string | undefined,
         createBranch: a.create_branch as string | undefined,
@@ -431,7 +464,54 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         model: a.model as string | undefined,
         ollamaModel: a.ollama_model as string | undefined,
         ollamaHost: a.ollama_host as string | undefined,
+        requiresApproval: !isTrusted,
       });
+
+      if (!isTrusted && owner) {
+        // Create a GitHub issue on the repo requesting approval
+        const repo = `${owner}/${repoUrl.split("/").pop()?.replace(/\.git$/, "") ?? "repo"}`;
+        const approvalBody = [
+          `cc-agent wants to run a task on this repo.`,
+          ``,
+          `**Task:** ${(a.task as string).slice(0, 500)}`,
+          ``,
+          `Owner @${TRUSTED_OWNERS[0]}: reply \`/approve\` to this comment to proceed.`,
+          ``,
+          `Job ID: \`${jobId}\``,
+        ].join("\n");
+
+        let approvalIssueUrl = "";
+        let approvalIssueNumber = 0;
+        try {
+          const { stdout } = await execFileAsync("gh", [
+            "issue", "create",
+            "--repo", repo,
+            "--title", `cc-agent: Approval needed for task (job ${jobId.slice(0, 8)})`,
+            "--body", approvalBody,
+            "--json", "number,url",
+          ]);
+          const issueData = JSON.parse(stdout) as { number: number; url: string };
+          approvalIssueUrl = issueData.url;
+          approvalIssueNumber = issueData.number;
+        } catch (err) {
+          logger.warn("approval-issue:create-failed", { jobId, error: String(err) });
+        }
+
+        manager.startApprovalPolling(jobId, approvalIssueUrl, repo, approvalIssueNumber);
+
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              job_id: jobId,
+              status: "pending_approval",
+              message: `Owner '${owner}' is not in the trusted list. Approval required. Comment /approve on the issue to proceed.`,
+              approval_issue_url: approvalIssueUrl,
+            }),
+          }],
+        };
+      }
+
       return {
         content: [
           {
@@ -467,6 +547,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
               session_id_after: job.sessionIdAfter,
               cost_usd: job.costUsd,
               usage: job.usage,
+              approval_issue_url: job.approvalIssueUrl,
             }),
           },
         ],
@@ -849,6 +930,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       } catch (err) {
         return { content: [{ type: "text", text: JSON.stringify({ error: String(err) }) }] };
       }
+    }
+
+    case "approve_job": {
+      logger.info("tool:approve_job", { job_id: a.job_id });
+      const result = await manager.approveJob(a.job_id as string);
+      return {
+        content: [{ type: "text", text: JSON.stringify(result) }],
+      };
     }
 
     default:

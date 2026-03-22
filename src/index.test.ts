@@ -41,6 +41,8 @@ vi.mock("child_process", async () => ({
       callback(null, { stdout: "[]", stderr: "" });
     } else if (args[0] === "issue" && args[1] === "view") {
       callback(null, { stdout: JSON.stringify({ number: 1, title: "Test issue", body: "body", url: "https://github.com/test/repo/issues/1", comments: [] }), stderr: "" });
+    } else if (args[0] === "issue" && args[1] === "create") {
+      callback(null, { stdout: JSON.stringify({ number: 99, url: "https://github.com/untrusted-owner/repo/issues/99" }), stderr: "" });
     } else {
       callback(null, { stdout: "", stderr: "" });
     }
@@ -99,6 +101,7 @@ describe("MCP server handlers", () => {
     expect(names).toContain("work_on_issue");
     expect(names).toContain("comment_on_issue");
     expect(names).toContain("close_issue");
+    expect(names).toContain("approve_job");
   });
 
   it("get_version returns a version string", async () => {
@@ -111,13 +114,13 @@ describe("MCP server handlers", () => {
     expect(data.version.length).toBeGreaterThan(0);
   });
 
-  it("spawn_agent with valid input returns job_id", async () => {
+  it("spawn_agent with trusted owner returns job_id and started status", async () => {
     const handler = capturedHandlers.get(CallToolRequestSchema)!;
     const result = await handler({
       params: {
         name: "spawn_agent",
         arguments: {
-          repo_url: "https://github.com/test/repo.git",
+          repo_url: "https://github.com/gonzih/repo.git",
           task: "Write tests",
         },
       },
@@ -125,6 +128,23 @@ describe("MCP server handlers", () => {
     const data = JSON.parse(result.content[0].text);
     expect(typeof data.job_id).toBe("string");
     expect(data.status).toBe("started");
+  });
+
+  it("spawn_agent with untrusted owner returns pending_approval status", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: {
+        name: "spawn_agent",
+        arguments: {
+          repo_url: "https://github.com/untrusted-owner/repo.git",
+          task: "Write tests",
+        },
+      },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(typeof data.job_id).toBe("string");
+    expect(data.status).toBe("pending_approval");
+    expect(data.approval_issue_url).toBeDefined();
   });
 
   it("list_jobs returns array", async () => {
@@ -195,6 +215,16 @@ describe("MCP server handlers", () => {
     const data = JSON.parse(result.content[0].text);
     expect(Array.isArray(data.ratings)).toBe(true);
     expect(typeof data.total).toBe("number");
+  });
+
+  it("approve_job with unknown ID returns error status", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: { name: "approve_job", arguments: { job_id: "nonexistent-id-xyz" } },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(data.status).toBe("error");
+    expect(data.message).toMatch(/not found/i);
   });
 
   it("unknown tool throws an error", async () => {

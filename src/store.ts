@@ -57,6 +57,9 @@ export interface JobRecord {
   outputLineCount: number;
   sleepUntil?: string;
   sleepReason?: string;
+  approvalIssueUrl?: string;
+  approvalRepo?: string;
+  approvalIssueNumber?: number;
 }
 
 export class JobStore {
