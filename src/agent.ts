@@ -6,19 +6,12 @@ import { promisify } from "util";
 import { v4 as uuidv4 } from "uuid";
 import { runClaude } from "./claude.js";
 import type { Job, JobSummary, SpawnOptions } from "./types.js";
-import {
-  ensureStateDirs,
-  loadPersistedJobs,
-  savePersistedJobs,
-  appendLog,
-  readLogSync,
-  isPidAlive,
-  type PersistedJob,
-} from "./state.js";
+import { ensureStateDirs, isPidAlive } from "./state.js";
+import { jobStore, type JobRecord } from "./store.js";
 
 const execFileAsync = promisify(execFile);
 
-const JOB_TTL_MS = 60 * 60 * 1000; // 1 hour — clean up old done jobs
+const JOB_TTL_MS = 60 * 60 * 1000; // 1 hour — clean up old done jobs from memory
 
 // Claude Sonnet 4.6 pricing (USD per 1M tokens)
 const PRICE_INPUT = 3.00;
@@ -36,36 +29,89 @@ function calculateCost(job: Job): number {
   return Math.round(cost * 10000) / 10000;
 }
 
+function toRecord(job: Job): JobRecord {
+  return {
+    id: job.id,
+    status: job.status,
+    repoUrl: job.repoUrl,
+    task: job.task,
+    branch: job.branch,
+    createBranch: job.createBranch,
+    dependsOn: job.dependsOn,
+    startedAt: job.startedAt.toISOString(),
+    finishedAt: job.finishedAt?.toISOString(),
+    exitCode: job.exitCode,
+    error: job.error,
+    pid: job.pid,
+    sessionIdAfter: job.sessionIdAfter,
+    usage: job.usage,
+    totalInputTokens: job.totalInputTokens,
+    totalOutputTokens: job.totalOutputTokens,
+    totalCacheReadTokens: job.totalCacheReadTokens,
+    totalCacheWriteTokens: job.totalCacheWriteTokens,
+    costUsd: job.costUsd,
+    recentTools: job.toolCalls.slice(-10),
+    outputLineCount: job.output.length,
+  };
+}
+
+function fromRecord(r: JobRecord): Job {
+  return {
+    id: r.id,
+    repoUrl: r.repoUrl,
+    task: r.task,
+    branch: r.branch,
+    createBranch: r.createBranch,
+    status: r.status,
+    output: [],
+    toolCalls: r.recentTools ?? [],
+    exitCode: r.exitCode,
+    error: r.error,
+    startedAt: new Date(r.startedAt ?? Date.now()),
+    finishedAt: r.finishedAt ? new Date(r.finishedAt) : undefined,
+    pid: r.pid,
+    sessionIdAfter: r.sessionIdAfter,
+    usage: r.usage,
+    totalInputTokens: r.totalInputTokens,
+    totalOutputTokens: r.totalOutputTokens,
+    totalCacheReadTokens: r.totalCacheReadTokens,
+    totalCacheWriteTokens: r.totalCacheWriteTokens,
+    costUsd: r.costUsd,
+    dependsOn: r.dependsOn,
+  };
+}
+
 export class JobManager {
   private jobs = new Map<string, Job>();
   private kills = new Map<string, () => void>();
   private defaultToken?: string;
-  private diskLoadedJobs = new Set<string>();
+  /** Jobs restored from storage — their output lives in store, not in job.output[]. */
+  private restoredJobs = new Set<string>();
 
   constructor(token?: string) {
     this.defaultToken = token;
     ensureStateDirs();
-    this.loadFromDisk();
     // Periodic cleanup of old finished jobs
     setInterval(() => this.cleanup(), 5 * 60 * 1000).unref();
-    // Periodic check for disk-loaded running jobs whose PID may have died
-    setInterval(() => this.checkDiskLoadedRunning(), 30 * 1000).unref();
+    // Periodic check for restored running jobs whose PID may have died
+    setInterval(() => this.checkRestoredRunning(), 30 * 1000).unref();
     // Dependency scheduler — promote pending jobs when deps are done
     setInterval(() => this.tick(), 3000).unref();
   }
 
-  private loadFromDisk(): void {
-    const persisted = loadPersistedJobs();
-    const updated: PersistedJob[] = [];
+  /** Must be called after initRedis() at startup. */
+  async init(): Promise<void> {
+    const records = await jobStore.loadAll();
+    const updates: Array<JobRecord> = [];
 
-    for (const p of persisted) {
-      let status = p.status;
-      let error = p.error;
-      let finishedAt = p.finishedAt;
+    for (const r of records) {
+      let status = r.status;
+      let error = r.error;
+      let finishedAt = r.finishedAt;
 
       if (status === "running" || status === "cloning") {
-        if (p.pid && isPidAlive(p.pid)) {
-          // Still alive — keep as running, output reads from disk log
+        if (r.pid && isPidAlive(r.pid)) {
+          // Process still alive — keep as running
         } else {
           status = "failed";
           error = (error ? error + "; " : "") + "Process not found after restart";
@@ -73,42 +119,23 @@ export class JobManager {
         }
       }
 
-      const job: Job = {
-        id: p.id,
-        repoUrl: p.repoUrl,
-        task: p.task,
-        branch: p.branch,
-        createBranch: p.createBranch,
-        status,
-        output: [],
-        toolCalls: [],
-        exitCode: p.exitCode,
-        error,
-        startedAt: new Date(p.startedAt),
-        finishedAt: finishedAt ? new Date(finishedAt) : undefined,
-        pid: p.pid,
-        sessionIdAfter: p.sessionIdAfter,
-        usage: p.usage,
-        totalInputTokens: p.totalInputTokens,
-        totalOutputTokens: p.totalOutputTokens,
-        totalCacheReadTokens: p.totalCacheReadTokens,
-        totalCacheWriteTokens: p.totalCacheWriteTokens,
-        costUsd: p.costUsd,
-        dependsOn: p.dependsOn,
-      };
-
+      const job = fromRecord({ ...r, status, error, finishedAt });
       this.jobs.set(job.id, job);
-      this.diskLoadedJobs.add(job.id);
-      updated.push({ ...p, status, error, finishedAt });
+      this.restoredJobs.add(job.id);
+
+      if (status !== r.status) {
+        updates.push({ ...r, status, error, finishedAt });
+      }
     }
 
-    if (updated.length > 0) {
-      savePersistedJobs(updated);
+    // Persist any status corrections back to store
+    for (const updated of updates) {
+      jobStore.saveJob(updated).catch(() => {});
     }
   }
 
-  private checkDiskLoadedRunning(): void {
-    for (const id of this.diskLoadedJobs) {
+  private checkRestoredRunning(): void {
+    for (const id of this.restoredJobs) {
       const job = this.jobs.get(id);
       if (!job) continue;
       if (job.status === "running" || job.status === "cloning") {
@@ -117,47 +144,19 @@ export class JobManager {
           job.finishedAt = new Date();
           job.error = (job.error ? job.error + "; " : "") + "Process exited after MCP restart";
           this.persistJob(job);
-          appendLog(job.id, "[cc-agent] Process no longer alive after MCP restart");
+          this.addOutput(job, "[cc-agent] Process no longer alive after MCP restart");
         }
       }
     }
   }
 
   private persistJob(job: Job): void {
-    const persisted = loadPersistedJobs();
-    const entry: PersistedJob = {
-      id: job.id,
-      status: job.status,
-      repoUrl: job.repoUrl,
-      task: job.task,
-      branch: job.branch,
-      createBranch: job.createBranch,
-      startedAt: job.startedAt.toISOString(),
-      finishedAt: job.finishedAt?.toISOString(),
-      exitCode: job.exitCode,
-      error: job.error,
-      pid: job.pid,
-      sessionIdAfter: job.sessionIdAfter,
-      usage: job.usage,
-      totalInputTokens: job.totalInputTokens,
-      totalOutputTokens: job.totalOutputTokens,
-      totalCacheReadTokens: job.totalCacheReadTokens,
-      totalCacheWriteTokens: job.totalCacheWriteTokens,
-      costUsd: job.costUsd,
-      dependsOn: job.dependsOn,
-    };
-    const idx = persisted.findIndex((p) => p.id === job.id);
-    if (idx >= 0) {
-      persisted[idx] = entry;
-    } else {
-      persisted.push(entry);
-    }
-    savePersistedJobs(persisted);
+    jobStore.saveJob(toRecord(job)).catch(() => {});
   }
 
   private addOutput(job: Job, line: string): void {
     job.output.push(line);
-    appendLog(job.id, line);
+    jobStore.appendOutput(job.id, line).catch(() => {});
   }
 
   async spawn(opts: SpawnOptions): Promise<string> {
@@ -187,7 +186,6 @@ export class JobManager {
     this.persistJob(job);
 
     if (!isPending) {
-      // Run async — don't await
       this.run(job, opts.claudeToken ?? this.defaultToken).catch((err) => {
         job.status = "failed";
         job.error = String(err);
@@ -222,7 +220,6 @@ export class JobManager {
         await execFileAsync("git", ["checkout", "-b", branchName], { cwd: workDir });
         this.addOutput(job, `[cc-agent] Created branch: ${branchName}`);
       } else if (job.createBranch === "true") {
-        // createBranch=true but no name — generate one from job id
         const auto = `agent/${job.id.slice(0, 8)}`;
         await execFileAsync("git", ["checkout", "-b", auto], { cwd: workDir });
         this.addOutput(job, `[cc-agent] Created branch: ${auto}`);
@@ -240,7 +237,6 @@ export class JobManager {
           sessionId: job.sessionId,
         });
 
-        // Save PID for cross-restart tracking
         if (proc.pid != null) {
           job.pid = proc.pid;
           this.persistJob(job);
@@ -261,7 +257,6 @@ export class JobManager {
           job.totalOutputTokens = (job.totalOutputTokens ?? 0) + u.outputTokens;
           job.totalCacheReadTokens = (job.totalCacheReadTokens ?? 0) + (u.cacheReadTokens ?? 0);
           job.totalCacheWriteTokens = (job.totalCacheWriteTokens ?? 0) + (u.cacheWriteTokens ?? 0);
-          // Prefer authoritative cost_usd from CLI result; fall back to calculated
           job.costUsd = u.costUsd != null ? u.costUsd : calculateCost(job);
           this.persistJob(job);
         });
@@ -272,23 +267,17 @@ export class JobManager {
 
         proc.on("tool", (name: string) => {
           job.toolCalls.push(name);
-          // Keep last 50 tool calls to avoid unbounded growth
           if (job.toolCalls.length > 50) job.toolCalls = job.toolCalls.slice(-50);
         });
 
-        proc.on("error", (err) => {
-          reject(err);
-        });
+        proc.on("error", (err) => { reject(err); });
 
         proc.on("exit", (code) => {
           job.exitCode = code ?? undefined;
           job.stdinStream = null;
           this.kills.delete(job.id);
-          if (code === 0 || code === null) {
-            resolve();
-          } else {
-            reject(new Error(`Claude exited with code ${code}`));
-          }
+          if (code === 0 || code === null) resolve();
+          else reject(new Error(`Claude exited with code ${code}`));
         });
       });
 
@@ -303,9 +292,11 @@ export class JobManager {
     } finally {
       job.finishedAt = new Date();
       this.persistJob(job);
-      // Clean up work dir after 10 minutes to allow output inspection
       if (workDir) {
-        setTimeout(() => rm(workDir!, { recursive: true, force: true }).catch(() => {}), 10 * 60 * 1000).unref();
+        setTimeout(
+          () => rm(workDir!, { recursive: true, force: true }).catch(() => {}),
+          10 * 60 * 1000
+        ).unref();
       }
     }
   }
@@ -314,13 +305,10 @@ export class JobManager {
     for (const [, job] of this.jobs) {
       if (job.status !== "pending") continue;
       if (!job.dependsOn?.length) { this.promote(job); continue; }
-      const allDone = job.dependsOn.every((depId) => {
-        const dep = this.jobs.get(depId);
-        return dep?.status === "done";
-      });
+      const allDone = job.dependsOn.every((depId) => this.jobs.get(depId)?.status === "done");
       const anyFailed = job.dependsOn.some((depId) => {
-        const dep = this.jobs.get(depId);
-        return dep?.status === "failed" || dep?.status === "cancelled";
+        const s = this.jobs.get(depId)?.status;
+        return s === "failed" || s === "cancelled";
       });
       if (anyFailed) {
         job.status = "failed";
@@ -346,17 +334,15 @@ export class JobManager {
     return this.jobs.get(id);
   }
 
-  getOutput(id: string, offset = 0): { lines: string[]; done: boolean; toolCalls: string[] } {
+  async getOutput(id: string, offset = 0): Promise<{ lines: string[]; done: boolean; toolCalls: string[] }> {
     const job = this.jobs.get(id);
     if (!job) {
-      // Job not in memory (expired or unknown) — try disk log
-      const lines = readLogSync(id, offset);
+      const lines = await jobStore.getOutput(id, offset);
       return { lines, done: true, toolCalls: [] };
     }
     const done = job.status === "done" || job.status === "failed" || job.status === "cancelled";
-    if (this.diskLoadedJobs.has(id)) {
-      // Output lives on disk for jobs recovered after restart
-      return { lines: readLogSync(id, offset), done, toolCalls: job.toolCalls };
+    if (this.restoredJobs.has(id)) {
+      return { lines: await jobStore.getOutput(id, offset), done, toolCalls: job.toolCalls };
     }
     return { lines: job.output.slice(offset), done, toolCalls: job.toolCalls };
   }
@@ -422,7 +408,7 @@ export class JobManager {
         now - job.finishedAt.getTime() > JOB_TTL_MS
       ) {
         this.jobs.delete(id);
-        this.diskLoadedJobs.delete(id);
+        this.restoredJobs.delete(id);
       }
     }
   }

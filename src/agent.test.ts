@@ -127,13 +127,13 @@ describe("JobManager", () => {
       repoUrl: "https://github.com/test/repo.git",
       task: "Write tests",
     });
-    const { lines, toolCalls } = manager.getOutput(id, 0);
+    const { lines, toolCalls } = await manager.getOutput(id, 0);
     expect(Array.isArray(lines)).toBe(true);
     expect(Array.isArray(toolCalls)).toBe(true);
   });
 
-  it("getOutput() returns disk log for unknown id", () => {
-    const { lines, done } = manager.getOutput("nonexistent-id", 0);
+  it("getOutput() returns disk log for unknown id", async () => {
+    const { lines, done } = await manager.getOutput("nonexistent-id", 0);
     expect(lines).toEqual([]);
     expect(done).toBe(true);
   });
