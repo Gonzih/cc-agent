@@ -5,6 +5,7 @@ import { join } from "path";
 import { promisify } from "util";
 import { v4 as uuidv4 } from "uuid";
 import { runClaude } from "./claude.js";
+import { injectPreamble } from "./preamble.js";
 import type { Job, JobSummary, SpawnOptions } from "./types.js";
 import { ensureStateDirs, isPidAlive } from "./state.js";
 import { jobStore, type JobRecord } from "./store.js";
@@ -177,6 +178,7 @@ export class JobManager {
       sessionId: opts.sessionId,
       claudeToken: opts.claudeToken,
       dependsOn: opts.dependsOn,
+      preamble: opts.preamble,
       status: isPending ? "pending" : "cloning",
       output: [],
       toolCalls: [],
@@ -206,7 +208,9 @@ export class JobManager {
       this.addOutput(job, `[cc-agent] Cloning ${job.repoUrl}...`);
 
       const cloneArgs = ["clone", "--depth", "1"];
-      if (job.branch) cloneArgs.push("--branch", job.branch);
+      // Only checkout an existing branch during clone; if we're creating a new
+      // branch it doesn't exist on remote yet, so clone the default branch first.
+      if (job.branch && !job.createBranch) cloneArgs.push("--branch", job.branch);
       cloneArgs.push(job.repoUrl, workDir);
 
       await execFileAsync("git", cloneArgs);
@@ -231,7 +235,7 @@ export class JobManager {
       this.addOutput(job, `[cc-agent] Starting Claude with task...`);
 
       await new Promise<void>((resolve, reject) => {
-        const proc = runClaude(job.task, workDir!, token, {
+        const proc = runClaude(injectPreamble(job.task, job.preamble), workDir!, token, {
           continueSession: job.continueSession,
           maxBudgetUsd: job.maxBudgetUsd,
           sessionId: job.sessionId,

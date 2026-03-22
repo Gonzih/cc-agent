@@ -49,7 +49,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "spawn_agent",
       description:
-        "Clone a git repo and run Claude Code on a task inside it. Returns a job_id immediately — the agent runs in the background.",
+        "Spawn a Claude Code agent on a GitHub repository.\n\nWORKFLOW: agent clones repo → creates its own branch → implements → tests → commits → pushes → opens PR → merges PR → publishes.\n\nIMPORTANT: Always set create_branch: false. The agent creates its own branch internally with `git checkout -b`. Setting create_branch: true will cause a clone failure because the branch doesn't exist on remote yet.\n\nParameters:\n- repo_url: GitHub repo URL (https://github.com/owner/repo)\n- task: Full task description. A workflow preamble is auto-injected before your task.\n- create_branch: ALWAYS false. The agent manages its own branch.\n- branch: Branch name hint passed to agent (agent will create it with git checkout -b)\n- claude_token: Optional Claude API token override",
       inputSchema: {
         type: "object",
         properties: {
@@ -59,15 +59,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           task: {
             type: "string",
-            description: "Task description to pass to Claude Code",
+            description: "Task description to pass to Claude Code. A workflow preamble is auto-injected before this task.",
           },
           branch: {
             type: "string",
-            description: "Branch to checkout after cloning (optional)",
+            description: "Branch name hint passed to the agent (agent will create it with git checkout -b). Optional.",
           },
           create_branch: {
             type: "string",
-            description: "New branch name to create before running the task (optional)",
+            description: "ALWAYS false. The agent creates its own branch with git checkout -b. Setting this to a branch name will cause a clone failure because the branch does not exist on remote yet.",
           },
           claude_token: {
             type: "string",
@@ -200,6 +200,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           description: {
             type: "string",
             description: "Human-readable description of this profile (optional)",
+          },
+          preamble: {
+            type: "string",
+            description: "Custom workflow preamble to inject before every task spawned from this profile. Overrides the default preamble (optional).",
           },
         },
         required: ["name", "repo_url", "task_template"],
@@ -458,6 +462,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         defaultBudgetUsd: a.default_budget_usd as number | undefined,
         branch: a.branch as string | undefined,
         description: a.description as string | undefined,
+        preamble: a.preamble as string | undefined,
         createdAt: new Date().toISOString(),
       });
       return {
@@ -509,6 +514,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         task,
         branch: (a.branch_override as string | undefined) ?? profile.branch,
         maxBudgetUsd: (a.budget_override as number | undefined) ?? profile.defaultBudgetUsd,
+        preamble: profile.preamble,
       });
       return {
         content: [

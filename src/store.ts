@@ -202,6 +202,7 @@ export interface Profile {
   defaultBudgetUsd?: number;
   branch?: string;
   description?: string;
+  preamble?: string;
   createdAt: string;
 }
 

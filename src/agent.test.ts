@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { injectPreamble, DEFAULT_PREAMBLE } from "./preamble.js";
 
 vi.mock("./state.js", () => ({
   ensureStateDirs: vi.fn(),
@@ -49,6 +50,29 @@ vi.mock("./claude.js", async () => {
 
 // Import after mocks are in place
 import { JobManager } from "./agent.js";
+
+describe("injectPreamble", () => {
+  it("prepends the default preamble to the task", () => {
+    const result = injectPreamble("do the thing");
+    expect(result).toBe(DEFAULT_PREAMBLE + "do the thing");
+  });
+
+  it("prepends a custom preamble when provided", () => {
+    const result = injectPreamble("do the thing", "## custom\n\n");
+    expect(result).toBe("## custom\n\ndo the thing");
+  });
+
+  it("uses default preamble when customPreamble is undefined", () => {
+    const result = injectPreamble("task", undefined);
+    expect(result.startsWith(DEFAULT_PREAMBLE)).toBe(true);
+  });
+
+  it("DEFAULT_PREAMBLE contains the workflow rules", () => {
+    expect(DEFAULT_PREAMBLE).toContain("cc-agent workflow");
+    expect(DEFAULT_PREAMBLE).toContain("NEVER work directly on main");
+    expect(DEFAULT_PREAMBLE).toContain("gh pr create");
+  });
+});
 
 describe("JobManager", () => {
   let manager: JobManager;
