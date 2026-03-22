@@ -31,11 +31,19 @@ vi.mock("child_process", async () => ({
     _cmd: string,
     _args: string[],
     optsOrCb: unknown,
-    cb?: (err: null, stdout: string, stderr: string) => void
+    cb?: (err: null, result: { stdout: string; stderr: string }) => void
   ) {
     const callback =
       typeof optsOrCb === "function" ? (optsOrCb as Function) : cb!;
-    callback(null, "", "");
+    // Return {stdout, stderr} objects so promisify(execFile) resolves correctly
+    const args = _args ?? [];
+    if (args[0] === "issue" && args[1] === "list") {
+      callback(null, { stdout: "[]", stderr: "" });
+    } else if (args[0] === "issue" && args[1] === "view") {
+      callback(null, { stdout: JSON.stringify({ number: 1, title: "Test issue", body: "body", url: "https://github.com/test/repo/issues/1", comments: [] }), stderr: "" });
+    } else {
+      callback(null, { stdout: "", stderr: "" });
+    }
   }),
 }));
 
@@ -87,6 +95,10 @@ describe("MCP server handlers", () => {
     expect(names).toContain("get_logs");
     expect(names).toContain("wake_job");
     expect(names).toContain("list_model_ratings");
+    expect(names).toContain("list_project_issues");
+    expect(names).toContain("work_on_issue");
+    expect(names).toContain("comment_on_issue");
+    expect(names).toContain("close_issue");
   });
 
   it("get_version returns a version string", async () => {
@@ -190,5 +202,55 @@ describe("MCP server handlers", () => {
     await expect(
       handler({ params: { name: "not_a_tool", arguments: {} } })
     ).rejects.toThrow("Unknown tool");
+  });
+
+  it("list_project_issues returns issues array", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: { name: "list_project_issues", arguments: { repo: "test/repo" } },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(Array.isArray(data.issues)).toBe(true);
+    expect(typeof data.total).toBe("number");
+  });
+
+  it("work_on_issue spawns an agent and returns job_id", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: { name: "work_on_issue", arguments: { repo: "test/repo", issue_number: 1 } },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(typeof data.job_id).toBe("string");
+    expect(data.issue_number).toBe(1);
+  });
+
+  it("comment_on_issue returns ok", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: { name: "comment_on_issue", arguments: { repo: "test/repo", issue_number: 1, body: "hello" } },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(data.ok).toBe(true);
+  });
+
+  it("close_issue returns ok", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: { name: "close_issue", arguments: { repo: "test/repo", issue_number: 1 } },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(data.ok).toBe(true);
+  });
+
+  it("cost_summary returns total_cost_usd, total_input_tokens, total_output_tokens, by_job", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: { name: "cost_summary", arguments: {} },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(typeof data.total_cost_usd).toBe("number");
+    expect(typeof data.total_input_tokens).toBe("number");
+    expect(typeof data.total_output_tokens).toBe("number");
+    expect(Array.isArray(data.by_job)).toBe(true);
   });
 });
