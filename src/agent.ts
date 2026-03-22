@@ -24,8 +24,9 @@ const PRICE_CACHE_WRITE = 3.75;
 
 const LIMIT_PATTERNS = [
   /you'?ve hit your (usage )?limit/i,
-  /rate limit/i,
-  /usage limit/i,
+  /claude ai usage limit reached/i,
+  /your (usage|plan) will reset at \d/i,
+  /claude\.ai.*has been (rate )?limited/i,
 ];
 
 function isLimitMessage(text: string): boolean {
@@ -444,14 +445,14 @@ export class JobManager {
         proc.on("text", (text) => {
           if (text.trim()) this.addOutput(job, text);
           // Detect usage/rate limit messages and park the job as sleeping
-          if (!sleepRequested && isLimitMessage(text)) {
+          if (!sleepRequested && job.output.length > 3 && isLimitMessage(text)) {
             sleepRequested = true;
             const wakeAt = parseResetTime(text);
             job.status = "sleeping";
             job.sleepUntil = wakeAt.toISOString();
             job.sleepReason = text.trim().slice(0, 500);
             this.persistJob(job);
-            logger.info("job:sleeping", { id: job.id, sleepUntil: job.sleepUntil });
+            logger.warn("job:sleeping", { id: job.id, sleepUntil: job.sleepUntil, triggeringText: text.trim().slice(0, 500) });
             this.addOutput(job, `[cc-agent] Usage limit detected. Sleeping until ${job.sleepUntil}`);
             proc.kill();
           }
