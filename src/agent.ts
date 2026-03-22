@@ -94,6 +94,9 @@ function toRecord(job: Job): JobRecord {
     outputLineCount: job.output.length,
     sleepUntil: job.sleepUntil,
     sleepReason: job.sleepReason,
+    approvalIssueUrl: job.approvalIssueUrl,
+    approvalRepo: job.approvalRepo,
+    approvalIssueNumber: job.approvalIssueNumber,
   };
 }
 
@@ -122,13 +125,20 @@ function fromRecord(r: JobRecord): Job {
     dependsOn: r.dependsOn,
     sleepUntil: r.sleepUntil,
     sleepReason: r.sleepReason,
+    approvalIssueUrl: r.approvalIssueUrl,
+    approvalRepo: r.approvalRepo,
+    approvalIssueNumber: r.approvalIssueNumber,
   };
 }
+
+const APPROVAL_POLL_INTERVAL_MS = 5 * 60 * 1000;  // 5 minutes
+const APPROVAL_TIMEOUT_MS = 24 * 60 * 60 * 1000;  // 24 hours
 
 export class JobManager {
   private jobs = new Map<string, Job>();
   private kills = new Map<string, () => void>();
   private wakeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private approvalPollers = new Map<string, { intervalId: ReturnType<typeof setInterval>; startTime: number }>();
   private defaultToken?: string;
   /** Jobs restored from storage — their output lives in store, not in job.output[]. */
   private restoredJobs = new Set<string>();
@@ -154,7 +164,9 @@ export class JobManager {
       let error = r.error;
       let finishedAt = r.finishedAt;
 
-      if (status === "running" || status === "cloning") {
+      if (status === "pending_approval") {
+      // pending_approval jobs survive restarts — approval poller is rescheduled below
+    } else if (status === "running" || status === "cloning") {
         if (r.pid && isPidAlive(r.pid)) {
           // Process still alive — keep as running
         } else {
@@ -180,9 +192,12 @@ export class JobManager {
     }
 
     // Re-schedule wake timers for sleeping jobs that survived a restart
+    // Re-schedule approval pollers for pending_approval jobs that survived a restart
     for (const [, job] of this.jobs) {
       if (job.status === "sleeping") {
         this.scheduleWake(job);
+      } else if (job.status === "pending_approval" && job.approvalRepo && job.approvalIssueNumber) {
+        this.scheduleApprovalPoll(job);
       }
     }
   }
@@ -192,6 +207,7 @@ export class JobManager {
       const job = this.jobs.get(id);
       if (!job) continue;
       if (job.status === "sleeping") continue; // managed by wake timer
+      if (job.status === "pending_approval") continue; // managed by approval poller
       if (job.status === "running" || job.status === "cloning") {
         if (!job.pid || !isPidAlive(job.pid)) {
           job.status = "failed";
@@ -221,6 +237,13 @@ export class JobManager {
       return dep?.status !== "done";
     });
     const isPending = pendingDeps && pendingDeps.length > 0;
+    const requiresApproval = opts.requiresApproval ?? false;
+
+    let initialStatus: Job["status"];
+    if (isPending) initialStatus = "pending";
+    else if (requiresApproval) initialStatus = "pending_approval";
+    else initialStatus = "cloning";
+
     const job: Job = {
       id,
       repoUrl: opts.repoUrl,
@@ -236,7 +259,7 @@ export class JobManager {
       model: opts.model,
       ollamaModel: opts.ollamaModel,
       ollamaHost: opts.ollamaHost,
-      status: isPending ? "pending" : "cloning",
+      status: initialStatus,
       output: [],
       toolCalls: [],
       startedAt: new Date(),
@@ -245,7 +268,7 @@ export class JobManager {
     this.persistJob(job);
     logger.info("job:spawned", { id, status: job.status, repoUrl: opts.repoUrl });
 
-    if (!isPending) {
+    if (!isPending && !requiresApproval) {
       this.run(job, opts.claudeToken ?? this.defaultToken).catch((err) => {
         job.status = "failed";
         job.error = String(err);
@@ -255,6 +278,88 @@ export class JobManager {
     }
 
     return id;
+  }
+
+  /** Set approval metadata and start background polling for /approve comments. */
+  startApprovalPolling(jobId: string, issueUrl: string, repo: string, issueNumber: number): void {
+    const job = this.jobs.get(jobId);
+    if (!job || job.status !== "pending_approval") return;
+    job.approvalIssueUrl = issueUrl;
+    job.approvalRepo = repo;
+    job.approvalIssueNumber = issueNumber;
+    this.persistJob(job);
+    this.scheduleApprovalPoll(job);
+  }
+
+  private scheduleApprovalPoll(job: Job): void {
+    if (!job.approvalRepo || !job.approvalIssueNumber) return;
+    const repo = job.approvalRepo;
+    const issueNumber = job.approvalIssueNumber;
+    const startTime = Date.now();
+
+    const intervalId = setInterval(async () => {
+      if (job.status !== "pending_approval") {
+        clearInterval(intervalId);
+        this.approvalPollers.delete(job.id);
+        return;
+      }
+
+      if (Date.now() - startTime > APPROVAL_TIMEOUT_MS) {
+        clearInterval(intervalId);
+        this.approvalPollers.delete(job.id);
+        job.status = "rejected";
+        job.finishedAt = new Date();
+        job.error = "Approval timed out after 24 hours";
+        logger.info("job:approval-timeout", { id: job.id });
+        this.addOutput(job, "[cc-agent] Approval timed out after 24 hours. Job rejected.");
+        this.persistJob(job);
+        return;
+      }
+
+      try {
+        const { stdout } = await execFileAsync("gh", [
+          "issue", "view", String(issueNumber), "--repo", repo, "--json", "comments",
+        ]);
+        const data = JSON.parse(stdout) as { comments?: Array<{ body: string }> };
+        const approved = data.comments?.some((c) => /\/approve\b/i.test(c.body));
+        if (approved) {
+          clearInterval(intervalId);
+          this.approvalPollers.delete(job.id);
+          this.doApprove(job);
+        }
+      } catch {
+        // Non-fatal polling failure; try again next interval
+      }
+    }, APPROVAL_POLL_INTERVAL_MS);
+
+    intervalId.unref();
+    this.approvalPollers.set(job.id, { intervalId, startTime });
+  }
+
+  private doApprove(job: Job): void {
+    logger.info("job:approved", { id: job.id });
+    this.addOutput(job, "[cc-agent] Approved. Starting job...");
+    this.run(job, job.claudeToken ?? this.defaultToken).catch((err) => {
+      job.status = "failed";
+      job.error = String(err);
+      job.finishedAt = new Date();
+      this.persistJob(job);
+    });
+  }
+
+  async approveJob(id: string): Promise<{ status: string; message: string }> {
+    const job = this.jobs.get(id);
+    if (!job) return { status: "error", message: "Job not found" };
+    if (job.status !== "pending_approval") {
+      return { status: "error", message: `Job is not pending approval (status: ${job.status})` };
+    }
+    const poller = this.approvalPollers.get(id);
+    if (poller) {
+      clearInterval(poller.intervalId);
+      this.approvalPollers.delete(id);
+    }
+    this.doApprove(job);
+    return { status: "ok", message: `Job ${id} approved and starting.` };
   }
 
   private async run(job: Job, token?: string): Promise<void> {
@@ -505,7 +610,7 @@ export class JobManager {
       const lines = await jobStore.getOutput(id, offset);
       return { lines, done: true, toolCalls: [] };
     }
-    const done = job.status === "done" || job.status === "failed" || job.status === "cancelled";
+    const done = job.status === "done" || job.status === "failed" || job.status === "cancelled" || job.status === "rejected";
     if (this.restoredJobs.has(id)) {
       return { lines: await jobStore.getOutput(id, offset), done, toolCalls: job.toolCalls };
     }
@@ -551,7 +656,8 @@ export class JobManager {
     if (!job) return false;
     if (
       job.status !== "pending" && job.status !== "cloning" &&
-      job.status !== "running" && job.status !== "sleeping"
+      job.status !== "running" && job.status !== "sleeping" &&
+      job.status !== "pending_approval"
     ) return false;
 
     // Clear wake timer if sleeping
@@ -559,6 +665,13 @@ export class JobManager {
     if (timer) {
       clearTimeout(timer);
       this.wakeTimers.delete(id);
+    }
+
+    // Clear approval poller if pending_approval
+    const poller = this.approvalPollers.get(id);
+    if (poller) {
+      clearInterval(poller.intervalId);
+      this.approvalPollers.delete(id);
     }
 
     const kill = this.kills.get(id);
@@ -579,7 +692,7 @@ export class JobManager {
     const now = Date.now();
     for (const [id, job] of this.jobs) {
       if (
-        (job.status === "done" || job.status === "failed" || job.status === "cancelled") &&
+        (job.status === "done" || job.status === "failed" || job.status === "cancelled" || job.status === "rejected") &&
         job.finishedAt &&
         now - job.finishedAt.getTime() > JOB_TTL_MS
       ) {

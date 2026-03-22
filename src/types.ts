@@ -1,6 +1,6 @@
 import type { Writable } from "stream";
 
-export type JobStatus = "pending" | "cloning" | "running" | "done" | "failed" | "cancelled" | "sleeping";
+export type JobStatus = "pending" | "cloning" | "running" | "done" | "failed" | "cancelled" | "sleeping" | "pending_approval" | "rejected";
 
 export interface TokenUsage {
   inputTokens: number;
@@ -38,11 +38,14 @@ export interface Job {
   dependsOn?: string[];
   claudeToken?: string;
   preamble?: string;
-  sleepUntil?: string;    // ISO timestamp — set when status is "sleeping"
-  sleepReason?: string;   // text snippet that triggered the sleep
+  sleepUntil?: string;         // ISO timestamp — set when status is "sleeping"
+  sleepReason?: string;        // text snippet that triggered the sleep
   model?: string;
   ollamaModel?: string;
   ollamaHost?: string;
+  approvalIssueUrl?: string;   // GitHub issue URL for pending_approval jobs
+  approvalRepo?: string;       // "owner/repo" for polling
+  approvalIssueNumber?: number; // issue number for polling
 }
 
 export interface SpawnOptions {
@@ -59,6 +62,7 @@ export interface SpawnOptions {
   model?: string;
   ollamaModel?: string;
   ollamaHost?: string;
+  requiresApproval?: boolean;
 }
 
 export interface JobSummary {
@@ -82,4 +86,5 @@ export interface JobSummary {
   totalCacheWriteTokens?: number;
   sleepUntil?: string;
   sleepReason?: string;
+  approvalIssueUrl?: string;
 }

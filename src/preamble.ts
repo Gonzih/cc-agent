@@ -21,6 +21,12 @@ You are running inside a temporary git clone of the repository. Follow this work
 - Nothing is done until PR is merged AND package is published/deployed
 - If a step fails, fix the root cause — do not skip or bypass
 
+### npm security (apply before any npm install or publish)
+- Run \`npm audit\` before installing dependencies and fix any high/critical vulnerabilities
+- Verify \`package.json\` dependencies haven't changed unexpectedly before installing
+- Pin exact versions (remove \`^\` and \`~\` prefixes) for security-critical packages
+- Use \`npm install --ignore-scripts\` for packages from untrusted sources
+
 ---
 
 `;
