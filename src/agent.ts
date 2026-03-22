@@ -1,7 +1,7 @@
 import { execFile } from "child_process";
 import { existsSync } from "fs";
-import { mkdtemp, rm } from "fs/promises";
-import { tmpdir } from "os";
+import { mkdtemp, rm, appendFile, mkdir } from "fs/promises";
+import { tmpdir, homedir } from "os";
 import { join } from "path";
 import { promisify } from "util";
 import { v4 as uuidv4 } from "uuid";
@@ -233,6 +233,9 @@ export class JobManager {
       claudeToken: opts.claudeToken,
       dependsOn: opts.dependsOn,
       preamble: opts.preamble,
+      model: opts.model,
+      ollamaModel: opts.ollamaModel,
+      ollamaHost: opts.ollamaHost,
       status: isPending ? "pending" : "cloning",
       output: [],
       toolCalls: [],
@@ -304,6 +307,9 @@ export class JobManager {
           continueSession: isResume || job.continueSession,
           maxBudgetUsd: job.maxBudgetUsd,
           sessionId: job.sessionId,
+          model: job.model,
+          ollamaModel: job.ollamaModel,
+          ollamaHost: job.ollamaHost,
         });
 
         if (proc.pid != null) {
@@ -373,6 +379,10 @@ export class JobManager {
       logger.info("job:done", { id: job.id, exitCode: job.exitCode ?? 0, costUsd: job.costUsd });
       this.addOutput(job, `[cc-agent] Done. Exit code: ${job.exitCode ?? 0}`);
       this.persistJob(job);
+
+      if (job.ollamaModel) {
+        this.writeModelRating(job).catch(() => {});
+      }
     } catch (err) {
       if (!sleepRequested) {
         job.status = "failed";
@@ -393,6 +403,26 @@ export class JobManager {
         }
       }
     }
+  }
+
+  private async writeModelRating(job: Job): Promise<void> {
+    const ratingsDir = join(homedir(), ".cc-agent");
+    await mkdir(ratingsDir, { recursive: true });
+    const ratingsFile = join(ratingsDir, "model-ratings.jsonl");
+    const entry = {
+      timestamp: new Date().toISOString(),
+      model: job.ollamaModel,
+      provider: "ollama",
+      job_id: job.id,
+      repo: job.repoUrl,
+      exit_code: job.exitCode ?? 0,
+      output_lines: job.output.length,
+      task_summary: job.task.slice(0, 100),
+      rating: null,
+      notes: null,
+    };
+    await appendFile(ratingsFile, JSON.stringify(entry) + "\n", "utf-8");
+    logger.info("model-rating:written", { job_id: job.id, model: job.ollamaModel });
   }
 
   private scheduleWake(job: Job): void {

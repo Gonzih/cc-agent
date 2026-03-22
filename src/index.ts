@@ -30,6 +30,7 @@ import { initRedis } from "./redis.js";
 import { logger } from "./logger.js";
 import { v4 as uuidv4 } from "uuid";
 import { existsSync, readFileSync } from "fs";
+import { readFile } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
 import { createRequire } from "module";
@@ -98,6 +99,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             items: { type: "string" },
             description:
               "Job IDs that must be done before this job starts. Job will be queued as pending until all dependencies complete.",
+          },
+          model: {
+            type: "string",
+            description:
+              "Model override for this job (e.g. 'claude-sonnet-4-5'). Defaults to CC_AGENT_DEFAULT_MODEL env var or 'claude-sonnet-4-5'.",
+          },
+          ollama_model: {
+            type: "string",
+            description:
+              "If set, route Claude Code through Ollama using this model name (e.g. 'nemotron-3-nano', 'deepseek-r1:7b'). Sets ANTHROPIC_BASE_URL, ANTHROPIC_API_KEY=ollama, and CLAUDE_MODEL env vars.",
+          },
+          ollama_host: {
+            type: "string",
+            description:
+              "Ollama host URL (default: 'http://localhost:11434'). Only used when ollama_model is set.",
           },
         },
         required: ["repo_url", "task"],
@@ -300,6 +316,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "list_model_ratings",
+      description: "Returns the content of ~/.cc-agent/model-ratings.jsonl as a structured JSON array. Used to monitor which open models (routed via Ollama) are performing well. Rating and notes fields are null until filled in by the operator.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
       name: "spawn_from_profile",
       description: "Spawn an agent job from a saved profile. Supports variable interpolation and per-call overrides.",
       inputSchema: {
@@ -350,6 +371,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         maxBudgetUsd: a.max_budget_usd as number | undefined,
         sessionId: a.session_id as string | undefined,
         dependsOn: a.depends_on as string[] | undefined,
+        model: a.model as string | undefined,
+        ollamaModel: a.ollama_model as string | undefined,
+        ollamaHost: a.ollama_host as string | undefined,
       });
       return {
         content: [
@@ -623,6 +647,22 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       const result = await manager.wakeJob(a.job_id as string);
       return {
         content: [{ type: "text", text: JSON.stringify(result) }],
+      };
+    }
+
+    case "list_model_ratings": {
+      logger.info("tool:list_model_ratings");
+      const ratingsFile = join(homedir(), ".cc-agent", "model-ratings.jsonl");
+      let ratings: unknown[] = [];
+      try {
+        const content = await readFile(ratingsFile, "utf-8");
+        ratings = content
+          .split("\n")
+          .filter((l) => l.trim().length > 0)
+          .map((l) => JSON.parse(l));
+      } catch {}
+      return {
+        content: [{ type: "text", text: JSON.stringify({ ratings, total: ratings.length }) }],
       };
     }
 
