@@ -168,6 +168,22 @@ describe("JobManager", () => {
     expect(result.error).toMatch(/not found/i);
   });
 
+  it("wakeJob() returns error for unknown job", async () => {
+    const result = await manager.wakeJob("nonexistent-id");
+    expect(result.status).toBe("error");
+    expect(result.message).toMatch(/not found/i);
+  });
+
+  it("wakeJob() returns error when job is not sleeping", async () => {
+    const id = await manager.spawn({
+      repoUrl: "https://github.com/test/repo.git",
+      task: "Write tests",
+    });
+    const result = await manager.wakeJob(id);
+    expect(result.status).toBe("error");
+    expect(result.message).toMatch(/not sleeping/i);
+  });
+
   it("sendMessage() returns error for non-running job (cloning state)", async () => {
     const id = await manager.spawn({
       repoUrl: "https://github.com/test/repo.git",
