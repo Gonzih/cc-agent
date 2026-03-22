@@ -37,6 +37,7 @@ export interface Job {
   costUsd?: number;
   dependsOn?: string[];
   claudeToken?: string;
+  preamble?: string;
 }
 
 export interface SpawnOptions {
@@ -49,6 +50,7 @@ export interface SpawnOptions {
   maxBudgetUsd?: number;
   sessionId?: string;
   dependsOn?: string[];
+  preamble?: string;
 }
 
 export interface JobSummary {
