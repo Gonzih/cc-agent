@@ -9,6 +9,7 @@ import { injectPreamble } from "./preamble.js";
 import type { Job, JobSummary, SpawnOptions } from "./types.js";
 import { ensureStateDirs, isPidAlive } from "./state.js";
 import { jobStore, type JobRecord } from "./store.js";
+import { logger } from "./logger.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -144,6 +145,7 @@ export class JobManager {
           job.status = "failed";
           job.finishedAt = new Date();
           job.error = (job.error ? job.error + "; " : "") + "Process exited after MCP restart";
+          logger.warn("job:process-died", { id, pid: job.pid });
           this.persistJob(job);
           this.addOutput(job, "[cc-agent] Process no longer alive after MCP restart");
         }
@@ -186,6 +188,7 @@ export class JobManager {
     };
     this.jobs.set(id, job);
     this.persistJob(job);
+    logger.info("job:spawned", { id, status: job.status, repoUrl: opts.repoUrl });
 
     if (!isPending) {
       this.run(job, opts.claudeToken ?? this.defaultToken).catch((err) => {
@@ -205,6 +208,7 @@ export class JobManager {
       // 1. Clone
       workDir = await mkdtemp(join(tmpdir(), `cc-agent-${job.id.slice(0, 8)}-`));
       job.workDir = workDir;
+      logger.info("job:cloning", { id: job.id, repoUrl: job.repoUrl });
       this.addOutput(job, `[cc-agent] Cloning ${job.repoUrl}...`);
 
       const cloneArgs = ["clone", "--depth", "1"];
@@ -232,6 +236,7 @@ export class JobManager {
       // 3. Run Claude
       job.status = "running";
       this.persistJob(job);
+      logger.info("job:running", { id: job.id });
       this.addOutput(job, `[cc-agent] Starting Claude with task...`);
 
       await new Promise<void>((resolve, reject) => {
@@ -286,11 +291,13 @@ export class JobManager {
       });
 
       job.status = "done";
+      logger.info("job:done", { id: job.id, exitCode: job.exitCode ?? 0, costUsd: job.costUsd });
       this.addOutput(job, `[cc-agent] Done. Exit code: ${job.exitCode ?? 0}`);
       this.persistJob(job);
     } catch (err) {
       job.status = "failed";
       job.error = String(err);
+      logger.error("job:failed", { id: job.id, error: job.error });
       this.addOutput(job, `[cc-agent] FAILED: ${job.error}`);
       this.persistJob(job);
     } finally {
@@ -318,8 +325,10 @@ export class JobManager {
         job.status = "failed";
         job.error = "Dependency failed";
         job.finishedAt = new Date();
+        logger.warn("job:dep-failed", { id: job.id });
         this.persistJob(job);
       } else if (allDone) {
+        logger.info("job:promoting", { id: job.id });
         this.promote(job);
       }
     }
@@ -398,6 +407,7 @@ export class JobManager {
 
     job.status = "cancelled";
     job.finishedAt = new Date();
+    logger.info("job:cancelled", { id });
     this.addOutput(job, "[cc-agent] Cancelled by user.");
     this.persistJob(job);
     return true;

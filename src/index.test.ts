@@ -84,6 +84,7 @@ describe("MCP server handlers", () => {
     expect(names).toContain("cancel_job");
     expect(names).toContain("send_message");
     expect(names).toContain("get_version");
+    expect(names).toContain("get_logs");
   });
 
   it("get_version returns a version string", async () => {

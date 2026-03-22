@@ -1,6 +1,7 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { Redis } from "ioredis";
+import { logger } from "./logger.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -75,37 +76,35 @@ export async function initRedis(): Promise<void> {
   let client = await tryConnect(1);
   if (client) {
     redisClient = client;
-    console.error("[cc-agent] Connected to existing Redis at localhost:6379");
+    logger.info("redis:connected", { host: "localhost", port: 6379 });
     return;
   }
 
   // Try Docker
-  console.error("[cc-agent] Redis not available, trying Docker...");
+  logger.warn("redis:unavailable — trying Docker");
   const dockerOk = await tryDocker();
   if (dockerOk) {
     client = await tryConnect(3);
     if (client) {
       redisClient = client;
-      console.error("[cc-agent] Redis started via Docker (cc-agent-redis container)");
+      logger.info("redis:connected via Docker (cc-agent-redis container)");
       return;
     }
   }
 
   // Try redis-server daemon
-  console.error("[cc-agent] Docker failed, trying redis-server daemon...");
+  logger.warn("redis:Docker failed — trying redis-server daemon");
   const daemonOk = await tryRedisDaemon();
   if (daemonOk) {
     client = await tryConnect(3);
     if (client) {
       redisClient = client;
-      console.error("[cc-agent] Redis started via redis-server daemon");
+      logger.info("redis:connected via redis-server daemon");
       return;
     }
   }
 
-  console.error(
-    "[cc-agent] Redis unavailable — falling back to in-memory storage (jobs will not persist)"
-  );
+  logger.warn("redis:unavailable — falling back to in-memory storage (jobs will not persist)");
 }
 
 export function getRedis(): Redis | null {
