@@ -1,53 +1,21 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
-import { join } from "path";
-import { homedir } from "os";
+import { profileStore, type Profile } from "./store.js";
 
-const STATE_DIR = join(homedir(), ".cc-agent");
-const PROFILES_FILE = join(STATE_DIR, "profiles.json");
+export type { Profile };
 
-export interface Profile {
-  name: string;
-  repoUrl: string;
-  taskTemplate: string; // Can contain {{variables}} for substitution
-  defaultBudgetUsd?: number;
-  branch?: string;
-  description?: string;
-  createdAt: string;
+export async function loadProfiles(): Promise<Profile[]> {
+  return profileStore.listProfiles();
 }
 
-export function loadProfiles(): Profile[] {
-  if (!existsSync(PROFILES_FILE)) return [];
-  try {
-    return JSON.parse(readFileSync(PROFILES_FILE, "utf-8"));
-  } catch {
-    return [];
-  }
+export async function upsertProfile(profile: Profile): Promise<void> {
+  return profileStore.saveProfile(profile);
 }
 
-export function saveProfiles(profiles: Profile[]): void {
-  mkdirSync(STATE_DIR, { recursive: true });
-  writeFileSync(PROFILES_FILE, JSON.stringify(profiles, null, 2), "utf-8");
+export async function getProfile(name: string): Promise<Profile | null> {
+  return profileStore.getProfile(name);
 }
 
-export function getProfile(name: string): Profile | undefined {
-  return loadProfiles().find((p) => p.name === name);
-}
-
-export function upsertProfile(profile: Profile): void {
-  const profiles = loadProfiles();
-  const idx = profiles.findIndex((p) => p.name === profile.name);
-  if (idx >= 0) profiles[idx] = profile;
-  else profiles.push(profile);
-  saveProfiles(profiles);
-}
-
-export function deleteProfile(name: string): boolean {
-  const profiles = loadProfiles();
-  const idx = profiles.findIndex((p) => p.name === name);
-  if (idx < 0) return false;
-  profiles.splice(idx, 1);
-  saveProfiles(profiles);
-  return true;
+export async function deleteProfile(name: string): Promise<boolean> {
+  return profileStore.deleteProfile(name);
 }
 
 export function interpolate(template: string, vars: Record<string, string>): string {

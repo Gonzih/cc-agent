@@ -25,6 +25,9 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { JobManager } from "./agent.js";
 import { loadProfiles, upsertProfile, deleteProfile, getProfile, interpolate } from "./profiles.js";
+import { planStore } from "./store.js";
+import { initRedis } from "./redis.js";
+import { v4 as uuidv4 } from "uuid";
 import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 const { version: PKG_VERSION } = require("../package.json") as { version: string };
@@ -357,7 +360,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
     case "get_job_output": {
       const offset = typeof a.offset === "number" ? a.offset : 0;
-      const { lines, done, toolCalls } = manager.getOutput(a.job_id as string, offset);
+      const { lines, done, toolCalls } = await manager.getOutput(a.job_id as string, offset);
       return {
         content: [
           {
@@ -442,14 +445,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       };
 
     case "create_profile": {
-      const name = a.name as string;
-      if (!/^[\w-]+$/.test(name)) {
+      const profileName = a.name as string;
+      if (!/^[\w-]+$/.test(profileName)) {
         return {
           content: [{ type: "text", text: JSON.stringify({ error: "Profile name must be alphanumeric with dashes/underscores only" }) }],
         };
       }
-      upsertProfile({
-        name,
+      await upsertProfile({
+        name: profileName,
         repoUrl: a.repo_url as string,
         taskTemplate: a.task_template as string,
         defaultBudgetUsd: a.default_budget_usd as number | undefined,
@@ -458,12 +461,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         createdAt: new Date().toISOString(),
       });
       return {
-        content: [{ type: "text", text: JSON.stringify({ ok: true, message: `Profile '${name}' saved.` }) }],
+        content: [{ type: "text", text: JSON.stringify({ ok: true, message: `Profile '${profileName}' saved.` }) }],
       };
     }
 
     case "list_profiles": {
-      const profiles = loadProfiles().map(({ name, repoUrl, description, defaultBudgetUsd }) => ({
+      const profiles = (await loadProfiles()).map(({ name, repoUrl, description, defaultBudgetUsd }) => ({
         name,
         repoUrl,
         description,
@@ -475,7 +478,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "delete_profile": {
-      const deleted = deleteProfile(a.name as string);
+      const deleted = await deleteProfile(a.name as string);
       return {
         content: [
           {
@@ -491,7 +494,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "spawn_from_profile": {
-      const profile = getProfile(a.profile_name as string);
+      const profile = await getProfile(a.profile_name as string);
       if (!profile) {
         return {
           content: [{ type: "text", text: JSON.stringify({ error: `Profile '${a.profile_name}' not found.` }) }],
@@ -527,7 +530,6 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         depends_on?: string[];
       }>;
 
-      // Map logical step IDs → actual job IDs as we spawn in order
       const stepIdToJobId = new Map<string, string>();
       const results: Array<{ stepId: string; jobId: string; status: string }> = [];
 
@@ -549,11 +551,16 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         results.push({ stepId: step.id, jobId, status: resolvedDeps?.length ? "pending" : "cloning" });
       }
 
+      // Persist the plan record
+      const planId = uuidv4();
+      planStore.savePlan({ id: planId, goal, steps: results, createdAt: new Date().toISOString() }).catch(() => {});
+
       return {
         content: [
           {
             type: "text",
             text: JSON.stringify({
+              plan_id: planId,
               goal,
               totalSteps: steps.length,
               steps: results,
@@ -568,6 +575,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       throw new Error(`Unknown tool: ${name}`);
   }
 });
+
+// Bootstrap: provision Redis, restore jobs, then start MCP transport
+await initRedis();
+await manager.init();
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

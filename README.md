@@ -173,16 +173,40 @@ spawn_agent({
 })
 ```
 
-## Persistent job storage
+## Persistence
 
-Job state is persisted to `<cwd>/.cc-agent/` across MCP server restarts:
+cc-agent v0.3.0+ stores all job state in **Redis**, which is auto-provisioned on startup — zero configuration needed.
 
-- `.cc-agent/jobs.json` — full job metadata (status, exit code, PID, params)
+### Auto-provisioning
+
+On startup, cc-agent tries to connect to Redis at `localhost:6379`. If unavailable:
+
+1. **Docker** — runs `docker run -d --name cc-agent-redis -p 6379:6379 --restart=unless-stopped redis:alpine`
+2. **redis-server** — if `redis-server` is on PATH, spawns it as a daemon
+3. **In-memory fallback** — logs a warning and continues; jobs are not persisted across restarts
+
+Once Redis is available, all job state, output, profiles, and plans survive MCP server restarts and are **shared across all Claude Code sessions** pointing at the same Redis instance.
+
+### Key schema
+
+| Key | Type | TTL | Contents |
+|-----|------|-----|----------|
+| `cca:job:<id>` | String (JSON) | 7 days | Full job record |
+| `cca:jobs:index` | List | — | Job IDs, newest first (capped at 500) |
+| `cca:job:<id>:output` | List | 7 days | Output lines (one entry per line) |
+| `cca:plan:<id>` | String (JSON) | 30 days | Plan record with step→job mapping |
+| `cca:profile:<name>` | String (JSON) | permanent | Profile config |
+| `cca:profiles:index` | Set | permanent | All profile names |
+
+### Disk fallback
+
+When Redis is unavailable, cc-agent falls back to the original disk-based storage:
+
+- `.cc-agent/jobs.json` — job metadata
 - `.cc-agent/jobs/<id>.log` — per-job output log
+- `~/.cc-agent/profiles.json` — profiles
 
-On restart, jobs whose processes are still alive are recovered as `running`. Dead PIDs are marked `failed` automatically. **Job history survives MCP server restarts.**
-
-`.cc-agent/` is gitignored automatically.
+Existing disk profiles are automatically migrated to Redis on first startup with Redis available.
 
 ## Job statuses
 
