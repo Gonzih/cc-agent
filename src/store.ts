@@ -67,8 +67,7 @@ export class JobStore {
     if (redis) {
       try {
         await redis.set(`cca:job:${record.id}`, JSON.stringify(record), "EX", JOB_TTL_SECONDS);
-        await redis.lpush("cca:jobs:index", record.id);
-        await redis.ltrim("cca:jobs:index", 0, 499);
+        await redis.sadd("cca:jobs", record.id);
         logger.info("store:saveJob", { id: record.id, status: record.status });
         return;
       } catch (err) {
@@ -96,7 +95,7 @@ export class JobStore {
     const redis = getRedis();
     if (redis) {
       try {
-        const ids = await redis.lrange("cca:jobs:index", 0, 499);
+        const ids = await redis.smembers("cca:jobs");
         if (!ids.length) return [];
         const pipeline = redis.pipeline();
         for (const id of ids) pipeline.get(`cca:job:${id}`);
