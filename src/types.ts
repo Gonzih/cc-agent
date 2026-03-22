@@ -40,6 +40,9 @@ export interface Job {
   preamble?: string;
   sleepUntil?: string;    // ISO timestamp — set when status is "sleeping"
   sleepReason?: string;   // text snippet that triggered the sleep
+  model?: string;
+  ollamaModel?: string;
+  ollamaHost?: string;
 }
 
 export interface SpawnOptions {
@@ -53,6 +56,9 @@ export interface SpawnOptions {
   sessionId?: string;
   dependsOn?: string[];
   preamble?: string;
+  model?: string;
+  ollamaModel?: string;
+  ollamaHost?: string;
 }
 
 export interface JobSummary {

@@ -38,7 +38,14 @@ export function runClaude(
   task: string,
   cwd: string,
   token?: string,
-  options?: { continueSession?: boolean; maxBudgetUsd?: number; sessionId?: string }
+  options?: {
+    continueSession?: boolean;
+    maxBudgetUsd?: number;
+    sessionId?: string;
+    model?: string;
+    ollamaModel?: string;
+    ollamaHost?: string;
+  }
 ): OneShot & { kill: () => void } {
   const emitter = new EventEmitter() as OneShot & { kill: () => void };
 
@@ -59,13 +66,26 @@ export function runClaude(
   args.push(task);
 
   const env: NodeJS.ProcessEnv = { ...process.env };
-  if (token) {
-    if (token.startsWith("sk-ant-api")) {
-      env.ANTHROPIC_API_KEY = token;
-      delete env.CLAUDE_CODE_OAUTH_TOKEN;
-    } else {
-      env.CLAUDE_CODE_OAUTH_TOKEN = token;
-      delete env.ANTHROPIC_API_KEY;
+  if (options?.ollamaModel) {
+    const ollamaHost = options.ollamaHost ?? "http://localhost:11434";
+    env.ANTHROPIC_BASE_URL = `${ollamaHost}/v1`;
+    env.ANTHROPIC_API_KEY = "ollama";
+    env.CLAUDE_MODEL = options.ollamaModel;
+    delete env.CLAUDE_CODE_OAUTH_TOKEN;
+  } else {
+    if (token) {
+      if (token.startsWith("sk-ant-api")) {
+        env.ANTHROPIC_API_KEY = token;
+        delete env.CLAUDE_CODE_OAUTH_TOKEN;
+      } else {
+        env.CLAUDE_CODE_OAUTH_TOKEN = token;
+        delete env.ANTHROPIC_API_KEY;
+      }
+    }
+    if (options?.model) {
+      env.CLAUDE_MODEL = options.model;
+    } else if (process.env.CC_AGENT_DEFAULT_MODEL) {
+      env.CLAUDE_MODEL = process.env.CC_AGENT_DEFAULT_MODEL;
     }
   }
 

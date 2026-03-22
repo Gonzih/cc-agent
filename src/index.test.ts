@@ -86,6 +86,7 @@ describe("MCP server handlers", () => {
     expect(names).toContain("get_version");
     expect(names).toContain("get_logs");
     expect(names).toContain("wake_job");
+    expect(names).toContain("list_model_ratings");
   });
 
   it("get_version returns a version string", async () => {
@@ -172,6 +173,16 @@ describe("MCP server handlers", () => {
     const data = JSON.parse(result.content[0].text);
     expect(data.status).toBe("error");
     expect(data.message).toMatch(/not found/i);
+  });
+
+  it("list_model_ratings returns array", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: { name: "list_model_ratings", arguments: {} },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(Array.isArray(data.ratings)).toBe(true);
+    expect(typeof data.total).toBe("number");
   });
 
   it("unknown tool throws an error", async () => {
