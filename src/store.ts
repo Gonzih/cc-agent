@@ -55,6 +55,8 @@ export interface JobRecord {
   costUsd?: number;
   recentTools: string[];
   outputLineCount: number;
+  sleepUntil?: string;
+  sleepReason?: string;
 }
 
 export class JobStore {

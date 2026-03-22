@@ -1,4 +1,5 @@
 import { execFile } from "child_process";
+import { existsSync } from "fs";
 import { mkdtemp, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -20,6 +21,43 @@ const PRICE_INPUT = 3.00;
 const PRICE_OUTPUT = 15.00;
 const PRICE_CACHE_READ = 0.30;
 const PRICE_CACHE_WRITE = 3.75;
+
+const LIMIT_PATTERNS = [
+  /you'?ve hit your (usage )?limit/i,
+  /rate limit/i,
+  /usage limit/i,
+];
+
+function isLimitMessage(text: string): boolean {
+  return LIMIT_PATTERNS.some((p) => p.test(text));
+}
+
+/** Parse a reset timestamp from limit messages like "resets 2pm (America/Los_Angeles)". */
+function parseResetTime(text: string): Date {
+  const defaultWake = new Date(Date.now() + 60 * 60 * 1000);
+  const match = text.match(/resets?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*\(([^)]+)\)/i);
+  if (!match) return defaultWake;
+  try {
+    const hourRaw = parseInt(match[1]);
+    const min = parseInt(match[2] ?? "0");
+    const ampm = match[3].toLowerCase();
+    const tz = match[4];
+    let h24 = hourRaw % 12;
+    if (ampm === "pm") h24 += 12;
+    const now = new Date();
+    // Represent "now" as a wall-clock Date in the target timezone
+    const tzNowStr = now.toLocaleString("en-US", { timeZone: tz });
+    const tzNow = new Date(tzNowStr);
+    const tzTarget = new Date(tzNowStr);
+    tzTarget.setHours(h24, min, 0, 0);
+    // If already past today's reset time in that TZ, advance by one day
+    if (tzTarget <= tzNow) tzTarget.setDate(tzTarget.getDate() + 1);
+    const msUntilReset = tzTarget.getTime() - tzNow.getTime();
+    return new Date(now.getTime() + msUntilReset);
+  } catch {
+    return defaultWake;
+  }
+}
 
 function calculateCost(job: Job): number {
   const cost =
@@ -54,6 +92,8 @@ function toRecord(job: Job): JobRecord {
     costUsd: job.costUsd,
     recentTools: job.toolCalls.slice(-10),
     outputLineCount: job.output.length,
+    sleepUntil: job.sleepUntil,
+    sleepReason: job.sleepReason,
   };
 }
 
@@ -80,12 +120,15 @@ function fromRecord(r: JobRecord): Job {
     totalCacheWriteTokens: r.totalCacheWriteTokens,
     costUsd: r.costUsd,
     dependsOn: r.dependsOn,
+    sleepUntil: r.sleepUntil,
+    sleepReason: r.sleepReason,
   };
 }
 
 export class JobManager {
   private jobs = new Map<string, Job>();
   private kills = new Map<string, () => void>();
+  private wakeTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private defaultToken?: string;
   /** Jobs restored from storage — their output lives in store, not in job.output[]. */
   private restoredJobs = new Set<string>();
@@ -120,6 +163,7 @@ export class JobManager {
           finishedAt = finishedAt ?? new Date().toISOString();
         }
       }
+      // sleeping jobs survive restarts — wake timer is rescheduled below
 
       const job = fromRecord({ ...r, status, error, finishedAt });
       this.jobs.set(job.id, job);
@@ -134,12 +178,20 @@ export class JobManager {
     for (const updated of updates) {
       jobStore.saveJob(updated).catch(() => {});
     }
+
+    // Re-schedule wake timers for sleeping jobs that survived a restart
+    for (const [, job] of this.jobs) {
+      if (job.status === "sleeping") {
+        this.scheduleWake(job);
+      }
+    }
   }
 
   private checkRestoredRunning(): void {
     for (const id of this.restoredJobs) {
       const job = this.jobs.get(id);
       if (!job) continue;
+      if (job.status === "sleeping") continue; // managed by wake timer
       if (job.status === "running" || job.status === "cloning") {
         if (!job.pid || !isPidAlive(job.pid)) {
           job.status = "failed";
@@ -203,45 +255,53 @@ export class JobManager {
   }
 
   private async run(job: Job, token?: string): Promise<void> {
-    let workDir: string | undefined;
+    // If resuming from sleep and the workDir still exists, skip clone/branch.
+    const isResume = !!(job.workDir && existsSync(job.workDir));
+    let workDir: string | undefined = isResume ? job.workDir : undefined;
+    let sleepRequested = false;
+
     try {
-      // 1. Clone
-      workDir = await mkdtemp(join(tmpdir(), `cc-agent-${job.id.slice(0, 8)}-`));
-      job.workDir = workDir;
-      logger.info("job:cloning", { id: job.id, repoUrl: job.repoUrl });
-      this.addOutput(job, `[cc-agent] Cloning ${job.repoUrl}...`);
+      if (!isResume) {
+        // 1. Clone
+        workDir = await mkdtemp(join(tmpdir(), `cc-agent-${job.id.slice(0, 8)}-`));
+        job.workDir = workDir;
+        logger.info("job:cloning", { id: job.id, repoUrl: job.repoUrl });
+        this.addOutput(job, `[cc-agent] Cloning ${job.repoUrl}...`);
 
-      const cloneArgs = ["clone", "--depth", "1"];
-      // Only checkout an existing branch during clone; if we're creating a new
-      // branch it doesn't exist on remote yet, so clone the default branch first.
-      if (job.branch && !job.createBranch) cloneArgs.push("--branch", job.branch);
-      cloneArgs.push(job.repoUrl, workDir);
+        const cloneArgs = ["clone", "--depth", "1"];
+        // Only checkout an existing branch during clone; if we're creating a new
+        // branch it doesn't exist on remote yet, so clone the default branch first.
+        if (job.branch && !job.createBranch) cloneArgs.push("--branch", job.branch);
+        cloneArgs.push(job.repoUrl, workDir);
 
-      await execFileAsync("git", cloneArgs);
-      this.addOutput(job, `[cc-agent] Cloned to ${workDir}`);
+        await execFileAsync("git", cloneArgs);
+        this.addOutput(job, `[cc-agent] Cloned to ${workDir}`);
 
-      // 2. Create branch if requested
-      const branchName = job.createBranch && job.createBranch !== "true" && job.createBranch !== "false"
-        ? job.createBranch
-        : null;
-      if (branchName) {
-        await execFileAsync("git", ["checkout", "-b", branchName], { cwd: workDir });
-        this.addOutput(job, `[cc-agent] Created branch: ${branchName}`);
-      } else if (job.createBranch === "true") {
-        const auto = `agent/${job.id.slice(0, 8)}`;
-        await execFileAsync("git", ["checkout", "-b", auto], { cwd: workDir });
-        this.addOutput(job, `[cc-agent] Created branch: ${auto}`);
+        // 2. Create branch if requested
+        const branchName = job.createBranch && job.createBranch !== "true" && job.createBranch !== "false"
+          ? job.createBranch
+          : null;
+        if (branchName) {
+          await execFileAsync("git", ["checkout", "-b", branchName], { cwd: workDir });
+          this.addOutput(job, `[cc-agent] Created branch: ${branchName}`);
+        } else if (job.createBranch === "true") {
+          const auto = `agent/${job.id.slice(0, 8)}`;
+          await execFileAsync("git", ["checkout", "-b", auto], { cwd: workDir });
+          this.addOutput(job, `[cc-agent] Created branch: ${auto}`);
+        }
       }
 
       // 3. Run Claude
       job.status = "running";
       this.persistJob(job);
-      logger.info("job:running", { id: job.id });
-      this.addOutput(job, `[cc-agent] Starting Claude with task...`);
+      logger.info("job:running", { id: job.id, isResume });
+      this.addOutput(job, isResume
+        ? `[cc-agent] Resuming Claude after sleep...`
+        : `[cc-agent] Starting Claude with task...`);
 
       await new Promise<void>((resolve, reject) => {
         const proc = runClaude(injectPreamble(job.task, job.preamble), workDir!, token, {
-          continueSession: job.continueSession,
+          continueSession: isResume || job.continueSession,
           maxBudgetUsd: job.maxBudgetUsd,
           sessionId: job.sessionId,
         });
@@ -272,6 +332,18 @@ export class JobManager {
 
         proc.on("text", (text) => {
           if (text.trim()) this.addOutput(job, text);
+          // Detect usage/rate limit messages and park the job as sleeping
+          if (!sleepRequested && isLimitMessage(text)) {
+            sleepRequested = true;
+            const wakeAt = parseResetTime(text);
+            job.status = "sleeping";
+            job.sleepUntil = wakeAt.toISOString();
+            job.sleepReason = text.trim().slice(0, 500);
+            this.persistJob(job);
+            logger.info("job:sleeping", { id: job.id, sleepUntil: job.sleepUntil });
+            this.addOutput(job, `[cc-agent] Usage limit detected. Sleeping until ${job.sleepUntil}`);
+            proc.kill();
+          }
         });
 
         proc.on("tool", (name: string) => {
@@ -285,31 +357,81 @@ export class JobManager {
           job.exitCode = code ?? undefined;
           job.stdinStream = null;
           this.kills.delete(job.id);
-          if (code === 0 || code === null) resolve();
+          // Resolve on sleep (we killed the proc intentionally) or clean exit
+          if (sleepRequested || code === 0 || code === null) resolve();
           else reject(new Error(`Claude exited with code ${code}`));
         });
       });
+
+      if (sleepRequested) {
+        // Park here — scheduleWake will re-invoke run() when the timer fires
+        this.scheduleWake(job);
+        return;
+      }
 
       job.status = "done";
       logger.info("job:done", { id: job.id, exitCode: job.exitCode ?? 0, costUsd: job.costUsd });
       this.addOutput(job, `[cc-agent] Done. Exit code: ${job.exitCode ?? 0}`);
       this.persistJob(job);
     } catch (err) {
-      job.status = "failed";
-      job.error = String(err);
-      logger.error("job:failed", { id: job.id, error: job.error });
-      this.addOutput(job, `[cc-agent] FAILED: ${job.error}`);
-      this.persistJob(job);
+      if (!sleepRequested) {
+        job.status = "failed";
+        job.error = String(err);
+        logger.error("job:failed", { id: job.id, error: job.error });
+        this.addOutput(job, `[cc-agent] FAILED: ${job.error}`);
+        this.persistJob(job);
+      }
     } finally {
-      job.finishedAt = new Date();
-      this.persistJob(job);
-      if (workDir) {
-        setTimeout(
-          () => rm(workDir!, { recursive: true, force: true }).catch(() => {}),
-          10 * 60 * 1000
-        ).unref();
+      if (!sleepRequested) {
+        job.finishedAt = new Date();
+        this.persistJob(job);
+        if (workDir) {
+          setTimeout(
+            () => rm(workDir!, { recursive: true, force: true }).catch(() => {}),
+            10 * 60 * 1000
+          ).unref();
+        }
       }
     }
+  }
+
+  private scheduleWake(job: Job): void {
+    const sleepUntil = job.sleepUntil ? new Date(job.sleepUntil) : new Date(Date.now() + 60 * 60 * 1000);
+    const delay = Math.max(0, sleepUntil.getTime() - Date.now());
+    logger.info("job:schedule-wake", { id: job.id, sleepUntil: sleepUntil.toISOString(), delayMs: delay });
+    const timer = setTimeout(() => {
+      this.wakeTimers.delete(job.id);
+      this.doWake(job);
+    }, delay);
+    timer.unref();
+    this.wakeTimers.set(job.id, timer);
+  }
+
+  private doWake(job: Job): void {
+    if (job.status !== "sleeping") return;
+    logger.info("job:waking", { id: job.id });
+    job.sleepUntil = undefined;
+    this.persistJob(job);
+    this.addOutput(job, `[cc-agent] Waking up, resuming task...`);
+    this.run(job, job.claudeToken ?? this.defaultToken).catch((err) => {
+      job.status = "failed";
+      job.error = String(err);
+      job.finishedAt = new Date();
+      this.persistJob(job);
+    });
+  }
+
+  async wakeJob(id: string): Promise<{ status: string; message: string }> {
+    const job = this.jobs.get(id);
+    if (!job) return { status: "error", message: "Job not found" };
+    if (job.status !== "sleeping") return { status: "error", message: `Job is not sleeping (status: ${job.status})` };
+    const timer = this.wakeTimers.get(id);
+    if (timer) {
+      clearTimeout(timer);
+      this.wakeTimers.delete(id);
+    }
+    this.doWake(job);
+    return { status: "ok", message: `Job ${id} woken up.` };
   }
 
   private tick(): void {
@@ -397,7 +519,17 @@ export class JobManager {
   cancel(id: string): boolean {
     const job = this.jobs.get(id);
     if (!job) return false;
-    if (job.status !== "pending" && job.status !== "cloning" && job.status !== "running") return false;
+    if (
+      job.status !== "pending" && job.status !== "cloning" &&
+      job.status !== "running" && job.status !== "sleeping"
+    ) return false;
+
+    // Clear wake timer if sleeping
+    const timer = this.wakeTimers.get(id);
+    if (timer) {
+      clearTimeout(timer);
+      this.wakeTimers.delete(id);
+    }
 
     const kill = this.kills.get(id);
     if (kill) {

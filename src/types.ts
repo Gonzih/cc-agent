@@ -1,6 +1,6 @@
 import type { Writable } from "stream";
 
-export type JobStatus = "pending" | "cloning" | "running" | "done" | "failed" | "cancelled";
+export type JobStatus = "pending" | "cloning" | "running" | "done" | "failed" | "cancelled" | "sleeping";
 
 export interface TokenUsage {
   inputTokens: number;
@@ -38,6 +38,8 @@ export interface Job {
   dependsOn?: string[];
   claudeToken?: string;
   preamble?: string;
+  sleepUntil?: string;    // ISO timestamp — set when status is "sleeping"
+  sleepReason?: string;   // text snippet that triggered the sleep
 }
 
 export interface SpawnOptions {
@@ -72,4 +74,6 @@ export interface JobSummary {
   totalOutputTokens?: number;
   totalCacheReadTokens?: number;
   totalCacheWriteTokens?: number;
+  sleepUntil?: string;
+  sleepReason?: string;
 }

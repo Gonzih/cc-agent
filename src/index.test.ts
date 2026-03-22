@@ -85,6 +85,7 @@ describe("MCP server handlers", () => {
     expect(names).toContain("send_message");
     expect(names).toContain("get_version");
     expect(names).toContain("get_logs");
+    expect(names).toContain("wake_job");
   });
 
   it("get_version returns a version string", async () => {
@@ -158,6 +159,19 @@ describe("MCP server handlers", () => {
     });
     const data = JSON.parse(result.content[0].text);
     expect(data.error).toBeDefined();
+  });
+
+  it("wake_job with unknown ID returns error status", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: {
+        name: "wake_job",
+        arguments: { job_id: "nonexistent-id-xyz" },
+      },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(data.status).toBe("error");
+    expect(data.message).toMatch(/not found/i);
   });
 
   it("unknown tool throws an error", async () => {

@@ -289,6 +289,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "wake_job",
+      description: "Manually wake a sleeping job immediately, bypassing its scheduled wake time.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          job_id: { type: "string", description: "Job ID of a sleeping job to wake" },
+        },
+        required: ["job_id"],
+      },
+    },
+    {
       name: "spawn_from_profile",
       description: "Spawn an agent job from a saved profile. Supports variable interpolation and per-call overrides.",
       inputSchema: {
@@ -604,6 +615,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             }),
           },
         ],
+      };
+    }
+
+    case "wake_job": {
+      logger.info("tool:wake_job", { job_id: a.job_id });
+      const result = await manager.wakeJob(a.job_id as string);
+      return {
+        content: [{ type: "text", text: JSON.stringify(result) }],
       };
     }
 
