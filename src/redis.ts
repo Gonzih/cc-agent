@@ -11,13 +11,17 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function tryConnect(attempts = 3): Promise<Redis | null> {
-  const delays = [500, 1000, 2000];
+function getRedisDb(): number {
+  return parseInt(process.env.REDIS_DB ?? "0", 10);
+}
+
+async function tryConnect(attempts = 10, delayMs = 500): Promise<Redis | null> {
   for (let i = 0; i < attempts; i++) {
     try {
       const client = new Redis({
         host: "localhost",
         port: 6379,
+        db: getRedisDb(),
         lazyConnect: true,
         connectTimeout: 3000,
         maxRetriesPerRequest: 1,
@@ -27,7 +31,7 @@ async function tryConnect(attempts = 3): Promise<Redis | null> {
       await client.ping();
       return client;
     } catch {
-      if (i < attempts - 1) await sleep(delays[i]);
+      if (i < attempts - 1) await sleep(delayMs);
     }
   }
   return null;
@@ -75,8 +79,8 @@ export async function initRedis(): Promise<void> {
   // Try direct connection first (Redis already running)
   let client = await tryConnect(1);
   if (client) {
+    logger.info("redis:connected", { host: "localhost", port: 6379, db: getRedisDb() });
     redisClient = client;
-    logger.info("redis:connected", { host: "localhost", port: 6379 });
     return;
   }
 
@@ -84,10 +88,10 @@ export async function initRedis(): Promise<void> {
   logger.warn("redis:unavailable — trying Docker");
   const dockerOk = await tryDocker();
   if (dockerOk) {
-    client = await tryConnect(3);
+    client = await tryConnect(10, 500);
     if (client) {
+      logger.info("redis:connected via Docker (cc-agent-redis container)", { db: getRedisDb() });
       redisClient = client;
-      logger.info("redis:connected via Docker (cc-agent-redis container)");
       return;
     }
   }
@@ -96,10 +100,10 @@ export async function initRedis(): Promise<void> {
   logger.warn("redis:Docker failed — trying redis-server daemon");
   const daemonOk = await tryRedisDaemon();
   if (daemonOk) {
-    client = await tryConnect(3);
+    client = await tryConnect(10, 500);
     if (client) {
+      logger.info("redis:connected via redis-server daemon", { db: getRedisDb() });
       redisClient = client;
-      logger.info("redis:connected via redis-server daemon");
       return;
     }
   }
