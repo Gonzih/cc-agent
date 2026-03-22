@@ -29,11 +29,15 @@ import { planStore, jobStore } from "./store.js";
 import { initRedis } from "./redis.js";
 import { logger } from "./logger.js";
 import { v4 as uuidv4 } from "uuid";
+import { execFile } from "child_process";
+import { promisify } from "util";
 import { existsSync, readFileSync } from "fs";
 import { readFile } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
 import { createRequire } from "module";
+
+const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
 const { version: PKG_VERSION } = require("../package.json") as { version: string };
 
@@ -321,6 +325,59 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       inputSchema: { type: "object", properties: {} },
     },
     {
+      name: "list_project_issues",
+      description: "List GitHub issues for a repository using the gh CLI.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo: { type: "string", description: "GitHub repo in owner/repo format" },
+          state: { type: "string", enum: ["open", "closed", "all"], description: "Issue state filter (default: open)" },
+          labels: { type: "array", items: { type: "string" }, description: "Filter by labels (optional)" },
+        },
+        required: ["repo"],
+      },
+    },
+    {
+      name: "work_on_issue",
+      description: "Fetch a GitHub issue, post a pickup comment, and spawn a cc-agent to work on it.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo: { type: "string", description: "GitHub repo in owner/repo format" },
+          issue_number: { type: "number", description: "Issue number to work on" },
+          extra_context: { type: "string", description: "Additional context to pass to the agent (optional)" },
+          max_budget_usd: { type: "number", description: "Max USD budget for the agent (optional, default 20)" },
+        },
+        required: ["repo", "issue_number"],
+      },
+    },
+    {
+      name: "comment_on_issue",
+      description: "Post a comment on a GitHub issue.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo: { type: "string", description: "GitHub repo in owner/repo format" },
+          issue_number: { type: "number", description: "Issue number to comment on" },
+          body: { type: "string", description: "Comment body" },
+        },
+        required: ["repo", "issue_number", "body"],
+      },
+    },
+    {
+      name: "close_issue",
+      description: "Close a GitHub issue, optionally posting a comment.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo: { type: "string", description: "GitHub repo in owner/repo format" },
+          issue_number: { type: "number", description: "Issue number to close" },
+          comment: { type: "string", description: "Comment to post when closing (optional)" },
+        },
+        required: ["repo", "issue_number"],
+      },
+    },
+    {
       name: "spawn_from_profile",
       description: "Spawn an agent job from a saved profile. Supports variable interpolation and per-call overrides.",
       inputSchema: {
@@ -480,12 +537,21 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
     case "cost_summary": {
       logger.info("tool:cost_summary");
-      const jobs = manager.list();
-      const totalCostUsd = jobs.reduce((sum, j) => sum + (j.costUsd ?? 0), 0);
-      const byRepo: Record<string, number> = {};
-      for (const j of jobs) {
-        if (j.costUsd) {
-          byRepo[j.repoUrl] = Math.round(((byRepo[j.repoUrl] ?? 0) + j.costUsd) * 10000) / 10000;
+      // Use jobStore (Redis/disk) to include all persisted jobs, not just in-memory ones
+      const allRecords = await jobStore.listJobs();
+      let totalCostUsd = 0;
+      let totalInputTokens = 0;
+      let totalOutputTokens = 0;
+      const byJob: Array<{ job_id: string; repo_url: string; cost_usd: number; input_tokens: number; output_tokens: number }> = [];
+      for (const r of allRecords) {
+        const cost = r.costUsd ?? 0;
+        const inp = r.totalInputTokens ?? 0;
+        const out = r.totalOutputTokens ?? 0;
+        totalCostUsd += cost;
+        totalInputTokens += inp;
+        totalOutputTokens += out;
+        if (cost > 0 || inp > 0 || out > 0) {
+          byJob.push({ job_id: r.id, repo_url: r.repoUrl, cost_usd: Math.round(cost * 10000) / 10000, input_tokens: inp, output_tokens: out });
         }
       }
       return {
@@ -493,9 +559,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           {
             type: "text",
             text: JSON.stringify({
-              totalJobs: jobs.length,
-              totalCostUsd: Math.round(totalCostUsd * 10000) / 10000,
-              byRepo,
+              total_cost_usd: Math.round(totalCostUsd * 10000) / 10000,
+              total_input_tokens: totalInputTokens,
+              total_output_tokens: totalOutputTokens,
+              by_job: byJob,
             }),
           },
         ],
@@ -681,6 +748,107 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       return {
         content: [{ type: "text", text: JSON.stringify({ lines, total: lines.length }) }],
       };
+    }
+
+    case "list_project_issues": {
+      logger.info("tool:list_project_issues", { repo: a.repo });
+      const repo = a.repo as string;
+      const state = (a.state as string | undefined) ?? "open";
+      const labels = a.labels as string[] | undefined;
+      const ghArgs = ["issue", "list", "--repo", repo, "--state", state, "--json", "number,title,body,labels,assignee,createdAt,url"];
+      if (labels?.length) {
+        for (const label of labels) ghArgs.push("--label", label);
+      }
+      try {
+        const { stdout } = await execFileAsync("gh", ghArgs);
+        const issues = JSON.parse(stdout.trim() || "[]");
+        return { content: [{ type: "text", text: JSON.stringify({ issues, total: issues.length }) }] };
+      } catch (err) {
+        return { content: [{ type: "text", text: JSON.stringify({ error: String(err) }) }] };
+      }
+    }
+
+    case "work_on_issue": {
+      logger.info("tool:work_on_issue", { repo: a.repo, issue_number: a.issue_number });
+      const repo = a.repo as string;
+      const issueNumber = a.issue_number as number;
+      const extraContext = a.extra_context as string | undefined;
+      const maxBudget = a.max_budget_usd as number | undefined;
+
+      // Fetch issue details
+      let issueData: { number: number; title: string; body: string; url: string; comments: unknown[] };
+      try {
+        const { stdout } = await execFileAsync("gh", ["issue", "view", String(issueNumber), "--repo", repo, "--json", "number,title,body,url,comments"]);
+        issueData = JSON.parse(stdout.trim());
+      } catch (err) {
+        return { content: [{ type: "text", text: JSON.stringify({ error: `Failed to fetch issue: ${String(err)}` }) }] };
+      }
+
+      // Post pickup comment
+      try {
+        await execFileAsync("gh", ["issue", "comment", String(issueNumber), "--repo", repo, "--body", "🤖 cc-agent picking up this issue..."]);
+      } catch {
+        // Non-fatal
+      }
+
+      // Normalize repo to full URL
+      const repoUrl = repo.startsWith("http") ? repo : `https://github.com/${repo}`;
+
+      // Build task
+      const taskLines = [
+        `You are working on GitHub issue #${issueNumber}: ${issueData.title}`,
+        ``,
+        `## Issue Description`,
+        issueData.body ?? "(no description)",
+      ];
+      if (extraContext) {
+        taskLines.push(``, `## Additional Context`, extraContext);
+      }
+      taskLines.push(
+        ``,
+        `## When Done`,
+        `Close the issue with: gh issue close ${issueNumber} --repo ${repo} --comment "Fixed in <PR_URL>"`,
+        ``,
+        `## If Blocked`,
+        `Comment on the issue: gh issue comment ${issueNumber} --repo ${repo} --body "..."`,
+      );
+      const task = taskLines.join("\n");
+
+      const jobId = await manager.spawn({ repoUrl, task, maxBudgetUsd: maxBudget });
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ job_id: jobId, issue_number: issueNumber, issue_url: issueData.url, agent_job_id: jobId }),
+        }],
+      };
+    }
+
+    case "comment_on_issue": {
+      logger.info("tool:comment_on_issue", { repo: a.repo, issue_number: a.issue_number });
+      const repo = a.repo as string;
+      const issueNumber = a.issue_number as number;
+      const body = a.body as string;
+      try {
+        await execFileAsync("gh", ["issue", "comment", String(issueNumber), "--repo", repo, "--body", body]);
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true, issue_number: issueNumber }) }] };
+      } catch (err) {
+        return { content: [{ type: "text", text: JSON.stringify({ error: String(err) }) }] };
+      }
+    }
+
+    case "close_issue": {
+      logger.info("tool:close_issue", { repo: a.repo, issue_number: a.issue_number });
+      const repo = a.repo as string;
+      const issueNumber = a.issue_number as number;
+      const comment = a.comment as string | undefined;
+      const ghArgs = ["issue", "close", String(issueNumber), "--repo", repo];
+      if (comment) ghArgs.push("--comment", comment);
+      try {
+        await execFileAsync("gh", ghArgs);
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true, issue_number: issueNumber }) }] };
+      } catch (err) {
+        return { content: [{ type: "text", text: JSON.stringify({ error: String(err) }) }] };
+      }
     }
 
     default:
