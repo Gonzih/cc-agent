@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { getRedis } from "./redis.js";
+import { getNamespace, jobIndexKey } from "./namespace.js";
 import {
   loadPersistedJobs,
   savePersistedJobs,
@@ -63,14 +64,15 @@ export interface JobRecord {
 }
 
 export class JobStore {
-  private memJobs = new Map<string, JobRecord>(); // fallback when Redis unavailable
+  private memJobs = new Map<string, JobRecord>();            // id → record (global lookup)
+  private memIndex = new Map<string, Set<string>>();         // namespace → set of ids
 
   async saveJob(record: JobRecord): Promise<void> {
     const redis = getRedis();
     if (redis) {
       try {
         await redis.set(`cca:job:${record.id}`, JSON.stringify(record), "EX", JOB_TTL_SECONDS);
-        await redis.sadd("cca:jobs", record.id);
+        await redis.sadd(jobIndexKey(), record.id);
         logger.info("store:saveJob", { id: record.id, status: record.status });
         return;
       } catch (err) {
@@ -78,6 +80,9 @@ export class JobStore {
       }
     }
     this.memJobs.set(record.id, record);
+    const ns = getNamespace();
+    if (!this.memIndex.has(ns)) this.memIndex.set(ns, new Set());
+    this.memIndex.get(ns)!.add(record.id);
     this.flushToDisk();
   }
 
@@ -98,7 +103,7 @@ export class JobStore {
     const redis = getRedis();
     if (redis) {
       try {
-        const ids = await redis.smembers("cca:jobs");
+        const ids = await redis.smembers(jobIndexKey());
         if (!ids.length) return [];
         const pipeline = redis.pipeline();
         for (const id of ids) pipeline.get(`cca:job:${id}`);
@@ -114,7 +119,11 @@ export class JobStore {
         logger.error("store:listJobs Redis failed", err);
       }
     }
-    return Array.from(this.memJobs.values());
+    const ns = getNamespace();
+    const ids = this.memIndex.get(ns) ?? new Set<string>();
+    return Array.from(ids)
+      .map((id) => this.memJobs.get(id))
+      .filter((r): r is JobRecord => r !== undefined);
   }
 
   async appendOutput(id: string, line: string): Promise<void> {
