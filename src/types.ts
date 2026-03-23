@@ -50,6 +50,7 @@ export interface Job {
   variantIndex?: number;       // which variant (1, 2, 3) this job is
   parentVariant?: string;      // job ID of the winning parent variant
   siblings?: string[];         // job IDs of parallel variants (for variant jobs)
+  dockerIsolation?: boolean;   // run agent in an isolated Docker container
 }
 
 export interface SpawnOptions {
@@ -70,6 +71,7 @@ export interface SpawnOptions {
   variantIndex?: number;
   parentVariant?: string;
   siblings?: string[];
+  dockerIsolation?: boolean;
 }
 
 export interface JobSummary {
@@ -98,4 +100,5 @@ export interface JobSummary {
   variantIndex?: number;
   parentVariant?: string;
   siblings?: string[];
+  isolation?: "docker" | "host";
 }

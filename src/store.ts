@@ -65,6 +65,7 @@ export interface JobRecord {
   variantIndex?: number;
   parentVariant?: string;
   siblings?: string[];
+  dockerIsolation?: boolean;
 }
 
 export class JobStore {
