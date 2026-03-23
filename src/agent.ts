@@ -168,13 +168,15 @@ export class JobManager {
       if (status === "pending_approval") {
       // pending_approval jobs survive restarts — approval poller is rescheduled below
     } else if (status === "running" || status === "cloning") {
-        if (r.pid && isPidAlive(r.pid)) {
-          // Process still alive — keep as running
-        } else {
-          status = "failed";
-          error = (error ? error + "; " : "") + "Process not found after restart";
-          finishedAt = finishedAt ?? new Date().toISOString();
+        if (r.pid) {
+          if (!isPidAlive(r.pid)) {
+            status = "failed";
+            error = (error ? error + "; " : "") + "Process not found after restart";
+            finishedAt = finishedAt ?? new Date().toISOString();
+          }
+          // else: process is alive — keep as running
         }
+        // else: no PID stored yet — can't verify liveness, leave as running
       }
       // sleeping jobs survive restarts — wake timer is rescheduled below
 
