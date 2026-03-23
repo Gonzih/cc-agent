@@ -401,7 +401,7 @@ describe("JobManager.init() — PID reconciliation on restart", () => {
     expect(job?.status).toBe("running");
   });
 
-  it("marks a running job with a dead PID as failed", async () => {
+  it("marks a running job with a dead PID as interrupted", async () => {
     mockIsPidAlive.mockReturnValue(false);
     mockJobStoreLoadAll.mockResolvedValue([{
       id: "job-dead-pid",
@@ -416,7 +416,7 @@ describe("JobManager.init() — PID reconciliation on restart", () => {
     const m = new JobManager();
     await m.init();
     const job = m.getJob("job-dead-pid");
-    expect(job?.status).toBe("failed");
+    expect(job?.status).toBe("interrupted");
     expect(job?.error).toMatch(/Process not found after restart/);
   });
 
@@ -437,6 +437,36 @@ describe("JobManager.init() — PID reconciliation on restart", () => {
     const job = m.getJob("job-alive-pid");
     expect(job?.status).toBe("running");
     expect(job?.error).toBeUndefined();
+  });
+
+  it("auto-respawns interrupted jobs with resumedFrom linking", async () => {
+    mockIsPidAlive.mockReturnValue(false);
+    mockJobStoreLoadAll.mockResolvedValue([{
+      id: "job-interrupted",
+      status: "running",
+      repoUrl: "https://github.com/test/repo.git",
+      task: "fix the bug",
+      startedAt: new Date().toISOString(),
+      pid: 99999,
+      recentTools: [],
+      outputLineCount: 0,
+    }]);
+    const m = new JobManager();
+    await m.init();
+
+    // Original job should be interrupted
+    const originalJob = m.getJob("job-interrupted");
+    expect(originalJob?.status).toBe("interrupted");
+
+    // A new resurrection job should have been spawned
+    const allJobs = m.list();
+    const resurrectionSummary = allJobs.find((j) => j.resumedFrom === "job-interrupted");
+    expect(resurrectionSummary).toBeDefined();
+    expect(resurrectionSummary?.repoUrl).toBe("https://github.com/test/repo.git");
+    // Check full (non-truncated) task via getJob()
+    const resurrectionJob = m.getJob(resurrectionSummary!.id);
+    expect(resurrectionJob?.task).toMatch(/RESUMING interrupted job/);
+    expect(resurrectionJob?.task).toMatch(/fix the bug/);
   });
 });
 
