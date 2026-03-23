@@ -9,7 +9,8 @@ import { runClaude } from "./claude.js";
 import { injectPreamble } from "./preamble.js";
 import type { Job, JobSummary, SpawnOptions } from "./types.js";
 import { ensureStateDirs, isPidAlive } from "./state.js";
-import { jobStore, type JobRecord } from "./store.js";
+import { jobStore, learningsStore, type JobRecord } from "./store.js";
+import { getNamespace } from "./namespace.js";
 import { logger } from "./logger.js";
 
 const execFileAsync = promisify(execFile);
@@ -58,6 +59,22 @@ function parseResetTime(text: string): Date {
   } catch {
     return defaultWake;
   }
+}
+
+/** Extract the ## LEARNINGS block from job output lines (everything from that heading to end). */
+function extractLearnings(output: string[]): string | null {
+  const idx = output.findIndex((line) => /^##\s+LEARNINGS\b/.test(line.trim()));
+  if (idx === -1) return null;
+  return output.slice(idx).join("\n").trim();
+}
+
+/** Build a preamble prefix with prior namespace learnings. */
+function buildLearningsPreamble(learnings: string[]): string {
+  if (!learnings.length) return "";
+  const items = learnings
+    .map((l, i) => `### Learning ${i + 1} (most recent first)\n${l}`)
+    .join("\n\n");
+  return `## Prior Learnings in This Namespace (read before starting)\n${items}\n\n---\n\n`;
 }
 
 function calculateCost(job: Job): number {
@@ -234,6 +251,13 @@ export class JobManager {
   }
 
   async spawn(opts: SpawnOptions): Promise<string> {
+    // Prepend prior namespace learnings to the task
+    const namespace = getNamespace();
+    const priorLearnings = await learningsStore.getLearnings(namespace, 5);
+    const task = priorLearnings.length
+      ? buildLearningsPreamble(priorLearnings) + opts.task
+      : opts.task;
+
     const id = uuidv4();
     const pendingDeps = opts.dependsOn?.filter((depId) => {
       const dep = this.jobs.get(depId);
@@ -250,7 +274,7 @@ export class JobManager {
     const job: Job = {
       id,
       repoUrl: opts.repoUrl,
-      task: opts.task,
+      task,
       branch: opts.branch,
       createBranch: opts.createBranch,
       continueSession: opts.continueSession,
@@ -487,6 +511,14 @@ export class JobManager {
       logger.info("job:done", { id: job.id, exitCode: job.exitCode ?? 0, costUsd: job.costUsd });
       this.addOutput(job, `[cc-agent] Done. Exit code: ${job.exitCode ?? 0}`);
       this.persistJob(job);
+
+      // Extract and store learnings for this namespace
+      const learnings = extractLearnings(job.output);
+      if (learnings) {
+        const ns = getNamespace();
+        learningsStore.addLearning(ns, learnings).catch(() => {});
+        logger.info("job:learnings-extracted", { id: job.id, namespace: ns, length: learnings.length });
+      }
 
       if (job.ollamaModel) {
         this.writeModelRating(job).catch(() => {});

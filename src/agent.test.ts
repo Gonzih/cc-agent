@@ -27,6 +27,12 @@ vi.mock("./store.js", () => ({
   },
   profileStore: {},
   planStore: { savePlan: vi.fn(async () => {}) },
+  learningsStore: {
+    getLearnings: vi.fn(async () => []),
+    addLearning: vi.fn(async () => {}),
+    clearLearnings: vi.fn(async () => {}),
+    getLearningsCount: vi.fn(async () => 0),
+  },
 }));
 
 vi.mock("./redis.js", () => ({ getRedis: vi.fn(() => null) }));
@@ -280,3 +286,4 @@ describe("JobManager.init() — PID reconciliation on restart", () => {
     expect(job?.error).toBeUndefined();
   });
 });
+

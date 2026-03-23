@@ -27,6 +27,20 @@ You are running inside a temporary git clone of the repository. Follow this work
 - Pin exact versions (remove \`^\` and \`~\` prefixes) for security-critical packages
 - Use \`npm install --ignore-scripts\` for packages from untrusted sources
 
+### Learnings (REQUIRED — write this at the end of every job)
+At the very end of your output, after all work is done, append a \`## LEARNINGS\` section:
+
+\`\`\`
+## LEARNINGS
+<!-- cc-agent extracts this block and stores it for future agents in this namespace -->
+- What worked: [specific techniques, commands, patterns that succeeded]
+- What failed: [specific approaches that didn't work and why]
+- Gotchas: [non-obvious things about this codebase/environment]
+- Recommendations for next agent: [what to do differently]
+\`\`\`
+
+This is not optional — every completed job must end with this block so the namespace accumulates institutional knowledge.
+
 ---
 
 `;
