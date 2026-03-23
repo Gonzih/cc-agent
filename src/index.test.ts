@@ -272,6 +272,79 @@ describe("MCP server handlers", () => {
     expect(data.ok).toBe(true);
   });
 
+  it("list_tools includes set_job_score", async () => {
+    const handler = capturedHandlers.get(ListToolsRequestSchema)!;
+    const result = await handler({});
+    const names = result.tools.map((t: { name: string }) => t.name);
+    expect(names).toContain("set_job_score");
+  });
+
+  it("set_job_score with unknown job returns error", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: { name: "set_job_score", arguments: { job_id: "nonexistent-xyz", score: 0.8 } },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(data.ok).toBe(false);
+    expect(data.error).toMatch(/not found/i);
+  });
+
+  it("create_plan with branches spawns variant jobs and evaluator", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: {
+        name: "create_plan",
+        arguments: {
+          goal: "Test evolutionary branching",
+          steps: [
+            {
+              id: "step1",
+              repo_url: "https://github.com/gonzih/repo.git",
+              task: "Implement the feature",
+              branches: 3,
+              branch_eval: "test_pass_rate",
+              branch_select: "best_score",
+            },
+          ],
+        },
+      },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(typeof data.plan_id).toBe("string");
+    // 3 variants + 1 evaluator = 4 total job entries
+    expect(data.steps.length).toBe(4);
+    // 3 variant jobs
+    const variants = data.steps.filter((s: { role?: string }) => s.role === "variant");
+    expect(variants.length).toBe(3);
+    // 1 evaluator job
+    const evaluators = data.steps.filter((s: { role?: string }) => s.role === "evaluator");
+    expect(evaluators.length).toBe(1);
+  });
+
+  it("set_job_score on existing job sets score", async () => {
+    const callHandler = capturedHandlers.get(CallToolRequestSchema)!;
+    // First spawn a job
+    const spawnResult = await callHandler({
+      params: {
+        name: "spawn_agent",
+        arguments: {
+          repo_url: "https://github.com/gonzih/repo.git",
+          task: "Test job for scoring",
+        },
+      },
+    });
+    const spawnData = JSON.parse(spawnResult.content[0].text);
+    const jobId = spawnData.job_id;
+
+    // Set a score
+    const scoreResult = await callHandler({
+      params: { name: "set_job_score", arguments: { job_id: jobId, score: 0.85, reason: "test passed" } },
+    });
+    const scoreData = JSON.parse(scoreResult.content[0].text);
+    expect(scoreData.ok).toBe(true);
+    expect(scoreData.score).toBe(0.85);
+  });
+
   it("cost_summary returns total_cost_usd, total_input_tokens, total_output_tokens, by_job", async () => {
     const handler = capturedHandlers.get(CallToolRequestSchema)!;
     const result = await handler({

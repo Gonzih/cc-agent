@@ -98,6 +98,10 @@ function toRecord(job: Job): JobRecord {
     approvalIssueUrl: job.approvalIssueUrl,
     approvalRepo: job.approvalRepo,
     approvalIssueNumber: job.approvalIssueNumber,
+    score: job.score,
+    variantIndex: job.variantIndex,
+    parentVariant: job.parentVariant,
+    siblings: job.siblings,
   };
 }
 
@@ -129,6 +133,10 @@ function fromRecord(r: JobRecord): Job {
     approvalIssueUrl: r.approvalIssueUrl,
     approvalRepo: r.approvalRepo,
     approvalIssueNumber: r.approvalIssueNumber,
+    score: r.score,
+    variantIndex: r.variantIndex,
+    parentVariant: r.parentVariant,
+    siblings: r.siblings,
   };
 }
 
@@ -264,6 +272,9 @@ export class JobManager {
       output: [],
       toolCalls: [],
       startedAt: new Date(),
+      variantIndex: opts.variantIndex,
+      parentVariant: opts.parentVariant,
+      siblings: opts.siblings,
     };
     this.jobs.set(id, job);
     this.persistJob(job);
@@ -638,6 +649,10 @@ export class JobManager {
       totalOutputTokens: j.totalOutputTokens,
       totalCacheReadTokens: j.totalCacheReadTokens,
       totalCacheWriteTokens: j.totalCacheWriteTokens,
+      score: j.score,
+      variantIndex: j.variantIndex,
+      parentVariant: j.parentVariant,
+      siblings: j.siblings,
     }));
   }
 
@@ -650,6 +665,23 @@ export class JobManager {
     }
     job.stdinStream.write(message + "\n");
     return { ok: true };
+  }
+
+  setJobScore(id: string, score: number, reason?: string): { ok: boolean; error?: string; score?: number } {
+    const job = this.jobs.get(id);
+    if (!job) return { ok: false, error: "Job not found" };
+    job.score = Math.min(1.0, Math.max(0.0, score));
+    this.persistJob(job);
+    this.addOutput(job, `[cc-agent] Score set to ${job.score}${reason ? ": " + reason : ""}`);
+    return { ok: true, score: job.score };
+  }
+
+  setJobSiblings(id: string, siblings: string[]): void {
+    const job = this.jobs.get(id);
+    if (job) {
+      job.siblings = siblings;
+      this.persistJob(job);
+    }
   }
 
   cancel(id: string): boolean {

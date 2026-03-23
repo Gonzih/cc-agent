@@ -24,6 +24,7 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { JobManager } from "./agent.js";
+import { buildEvaluatorTask } from "./evaluator.js";
 import { loadProfiles, upsertProfile, deleteProfile, getProfile, interpolate } from "./profiles.js";
 import { planStore, jobStore } from "./store.js";
 import { initRedis } from "./redis.js";
@@ -304,6 +305,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                   items: { type: "string" },
                   description: "Step IDs (from this plan) that must complete before this step starts",
                 },
+                branches: {
+                  type: "number",
+                  description: "If set, spawn this many parallel variant jobs for this step instead of 1. An evaluator job is automatically added to score and select the best variant.",
+                },
+                branch_eval: {
+                  type: "string",
+                  enum: ["test_pass_rate", "pr_merged", "manual"],
+                  description: "How to score variants: test_pass_rate (parse test output), pr_merged (check PR status), manual (evaluator uses judgment). Default: test_pass_rate",
+                },
+                branch_select: {
+                  type: "string",
+                  enum: ["best_score", "score_prop", "latest"],
+                  description: "How to pick the winner: best_score (highest score wins), score_prop (score-proportional random selection), latest (most recently completed). Default: best_score",
+                },
               },
               required: ["id", "repo_url", "task"],
             },
@@ -403,6 +418,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           job_id: { type: "string", description: "Job ID of the pending_approval job to approve" },
         },
         required: ["job_id"],
+      },
+    },
+    {
+      name: "set_job_score",
+      description: "Set a quality score (0.0–1.0) on a completed job. Used by evaluator agents in evolutionary branching plans to record how well each variant performed.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          job_id: { type: "string", description: "Job ID to score" },
+          score: { type: "number", description: "Score from 0.0 to 1.0" },
+          reason: { type: "string", description: "Optional reason or explanation for the score" },
+        },
+        required: ["job_id", "score"],
       },
     },
     {
@@ -747,10 +775,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         task: string;
         create_branch?: string;
         depends_on?: string[];
+        branches?: number;
+        branch_eval?: "test_pass_rate" | "pr_merged" | "manual";
+        branch_select?: "best_score" | "score_prop" | "latest";
       }>;
 
       const stepIdToJobId = new Map<string, string>();
-      const results: Array<{ stepId: string; jobId: string; status: string }> = [];
+      const results: Array<{ stepId: string; jobId: string; status: string; role?: string }> = [];
 
       for (const step of steps) {
         const resolvedDeps = step.depends_on?.map((sid) => {
@@ -759,18 +790,79 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           return jobId;
         });
 
-        const jobId = await manager.spawn({
-          repoUrl: step.repo_url,
-          task: step.task,
-          createBranch: step.create_branch,
-          dependsOn: resolvedDeps,
-        });
+        if (step.branches && step.branches > 1) {
+          // Evolutionary mode: spawn N variant jobs in parallel
+          const branchEval = step.branch_eval ?? "test_pass_rate";
+          const branchSelect = step.branch_select ?? "best_score";
+          const variantJobIds: string[] = [];
+          const variantBranches: (string | undefined)[] = [];
 
-        stepIdToJobId.set(step.id, jobId);
-        results.push({ stepId: step.id, jobId, status: resolvedDeps?.length ? "pending" : "cloning" });
+          for (let i = 1; i <= step.branches; i++) {
+            const branchName = step.create_branch ? `${step.create_branch}-v${i}` : undefined;
+            variantBranches.push(branchName);
+            const jobId = await manager.spawn({
+              repoUrl: step.repo_url,
+              task: step.task,
+              createBranch: branchName,
+              dependsOn: resolvedDeps,
+              variantIndex: i,
+            });
+            variantJobIds.push(jobId);
+          }
+
+          // Update siblings on all variant jobs
+          for (const jobId of variantJobIds) {
+            manager.setJobSiblings(jobId, variantJobIds.filter((id) => id !== jobId));
+          }
+
+          // Build evaluator task and spawn evaluator job
+          const evalTask = buildEvaluatorTask({
+            variantJobIds,
+            variantBranches,
+            branchEval,
+            branchSelect,
+            stepId: step.id,
+          });
+
+          const evalJobId = await manager.spawn({
+            repoUrl: step.repo_url,
+            task: evalTask,
+            dependsOn: variantJobIds,
+          });
+
+          // The logical step ID maps to the evaluator job (so subsequent steps depend on it)
+          stepIdToJobId.set(step.id, evalJobId);
+
+          // Track variant jobs
+          for (let i = 0; i < variantJobIds.length; i++) {
+            results.push({
+              stepId: `${step.id}-v${i + 1}`,
+              jobId: variantJobIds[i],
+              status: resolvedDeps?.length ? "pending" : "cloning",
+              role: "variant",
+            });
+          }
+          // Track evaluator job
+          results.push({
+            stepId: step.id,
+            jobId: evalJobId,
+            status: "pending",
+            role: "evaluator",
+          });
+        } else {
+          // Standard single job
+          const jobId = await manager.spawn({
+            repoUrl: step.repo_url,
+            task: step.task,
+            createBranch: step.create_branch,
+            dependsOn: resolvedDeps,
+          });
+
+          stepIdToJobId.set(step.id, jobId);
+          results.push({ stepId: step.id, jobId, status: resolvedDeps?.length ? "pending" : "cloning" });
+        }
       }
 
-      // Persist the plan record
       const planId = uuidv4();
       planStore.savePlan({ id: planId, goal, steps: results, createdAt: new Date().toISOString() }).catch(() => {});
 
@@ -935,6 +1027,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     case "approve_job": {
       logger.info("tool:approve_job", { job_id: a.job_id });
       const result = await manager.approveJob(a.job_id as string);
+      return {
+        content: [{ type: "text", text: JSON.stringify(result) }],
+      };
+    }
+
+    case "set_job_score": {
+      logger.info("tool:set_job_score", { job_id: a.job_id, score: a.score });
+      const result = manager.setJobScore(a.job_id as string, a.score as number, a.reason as string | undefined);
       return {
         content: [{ type: "text", text: JSON.stringify(result) }],
       };

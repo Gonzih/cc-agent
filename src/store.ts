@@ -61,6 +61,10 @@ export interface JobRecord {
   approvalIssueUrl?: string;
   approvalRepo?: string;
   approvalIssueNumber?: number;
+  score?: number;
+  variantIndex?: number;
+  parentVariant?: string;
+  siblings?: string[];
 }
 
 export class JobStore {
@@ -200,6 +204,10 @@ export class JobStore {
         totalCacheWriteTokens: r.totalCacheWriteTokens,
         costUsd: r.costUsd,
         dependsOn: r.dependsOn,
+        score: r.score,
+        variantIndex: r.variantIndex,
+        parentVariant: r.parentVariant,
+        siblings: r.siblings,
       }));
       savePersistedJobs(records);
     } catch (err) {
