@@ -146,4 +146,22 @@ describe("isPidAlive", () => {
   it("returns false for an invalid PID", () => {
     expect(isPidAlive(999999999)).toBe(false);
   });
+
+  it("returns true when process.kill throws EPERM (process alive, no permission)", () => {
+    const killSpy = vi.spyOn(process, "kill").mockImplementationOnce(() => {
+      const err = Object.assign(new Error("operation not permitted"), { code: "EPERM" }) as NodeJS.ErrnoException;
+      throw err;
+    });
+    expect(isPidAlive(999)).toBe(true);
+    killSpy.mockRestore();
+  });
+
+  it("returns false when process.kill throws ESRCH (process not found)", () => {
+    const killSpy = vi.spyOn(process, "kill").mockImplementationOnce(() => {
+      const err = Object.assign(new Error("no such process"), { code: "ESRCH" }) as NodeJS.ErrnoException;
+      throw err;
+    });
+    expect(isPidAlive(999)).toBe(false);
+    killSpy.mockRestore();
+  });
 });

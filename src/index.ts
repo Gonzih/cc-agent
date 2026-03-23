@@ -26,7 +26,8 @@ import {
 import { JobManager } from "./agent.js";
 import { buildEvaluatorTask } from "./evaluator.js";
 import { loadProfiles, upsertProfile, deleteProfile, getProfile, interpolate } from "./profiles.js";
-import { planStore, jobStore } from "./store.js";
+import { planStore, jobStore, learningsStore } from "./store.js";
+import { getNamespace } from "./namespace.js";
 import { initRedis } from "./redis.js";
 import { logger } from "./logger.js";
 import { v4 as uuidv4 } from "uuid";
@@ -434,6 +435,36 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "get_learnings",
+      description: "Return accumulated learnings for a namespace. Learnings are written by agents at the end of each job and stored per-namespace. Use this to understand what prior agents have discovered.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          namespace: {
+            type: "string",
+            description: "Namespace to query (defaults to current namespace)",
+          },
+          limit: {
+            type: "number",
+            description: "Maximum number of learnings to return (default 10)",
+          },
+        },
+      },
+    },
+    {
+      name: "clear_learnings",
+      description: "Clear all stored learnings for a namespace. Useful when starting fresh on a refactored codebase.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          namespace: {
+            type: "string",
+            description: "Namespace to clear learnings for (defaults to current namespace)",
+          },
+        },
+      },
+    },
+    {
       name: "spawn_from_profile",
       description: "Spawn an agent job from a saved profile. Supports variable interpolation and per-call overrides.",
       inputSchema: {
@@ -606,11 +637,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     case "list_jobs": {
       logger.info("tool:list_jobs");
       const jobs = (await jobStore.listJobs()) ?? [];
+      const namespace = getNamespace();
+      const learnings_count = await learningsStore.getLearningsCount(namespace);
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify({ jobs, total: jobs.length }),
+            text: JSON.stringify({ jobs, total: jobs.length, namespace, learnings_count }),
           },
         ],
       };
@@ -1037,6 +1070,31 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       const result = manager.setJobScore(a.job_id as string, a.score as number, a.reason as string | undefined);
       return {
         content: [{ type: "text", text: JSON.stringify(result) }],
+      };
+    }
+
+    case "get_learnings": {
+      const ns = (a.namespace as string | undefined) ?? getNamespace();
+      const limit = typeof a.limit === "number" ? a.limit : 10;
+      logger.info("tool:get_learnings", { namespace: ns, limit });
+      const learnings = await learningsStore.getLearnings(ns, limit);
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ namespace: ns, learnings, total: learnings.length }),
+        }],
+      };
+    }
+
+    case "clear_learnings": {
+      const ns = (a.namespace as string | undefined) ?? getNamespace();
+      logger.info("tool:clear_learnings", { namespace: ns });
+      await learningsStore.clearLearnings(ns);
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ ok: true, namespace: ns, message: `Learnings cleared for namespace '${ns}'.` }),
+        }],
       };
     }
 
