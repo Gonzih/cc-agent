@@ -337,8 +337,80 @@ export class PlanStore {
   }
 }
 
+// ─── Learnings Store ─────────────────────────────────────────────────────────
+
+const LEARNINGS_MAX = 50;
+const LEARNINGS_TTL_SECONDS = 90 * 24 * 60 * 60; // 90 days
+
+export class LearningsStore {
+  private memLearnings = new Map<string, string[]>(); // namespace → entries (newest first)
+
+  private learningsKey(namespace: string): string {
+    return `cca:learnings:${namespace}`;
+  }
+
+  async addLearning(namespace: string, content: string): Promise<void> {
+    const redis = getRedis();
+    if (redis) {
+      try {
+        const key = this.learningsKey(namespace);
+        await redis.lpush(key, content);
+        await redis.ltrim(key, 0, LEARNINGS_MAX - 1);
+        await redis.expire(key, LEARNINGS_TTL_SECONDS);
+        logger.info("learnings:added", { namespace, length: content.length });
+        return;
+      } catch (err) {
+        logger.error("learnings:addLearning Redis failed", err);
+      }
+    }
+    const list = this.memLearnings.get(namespace) ?? [];
+    list.unshift(content);
+    if (list.length > LEARNINGS_MAX) list.splice(LEARNINGS_MAX);
+    this.memLearnings.set(namespace, list);
+  }
+
+  async getLearnings(namespace: string, limit = 10): Promise<string[]> {
+    const redis = getRedis();
+    if (redis) {
+      try {
+        return await redis.lrange(this.learningsKey(namespace), 0, limit - 1);
+      } catch (err) {
+        logger.error("learnings:getLearnings Redis failed", err);
+      }
+    }
+    return (this.memLearnings.get(namespace) ?? []).slice(0, limit);
+  }
+
+  async clearLearnings(namespace: string): Promise<void> {
+    const redis = getRedis();
+    if (redis) {
+      try {
+        await redis.del(this.learningsKey(namespace));
+        logger.info("learnings:cleared", { namespace });
+        return;
+      } catch (err) {
+        logger.error("learnings:clearLearnings Redis failed", err);
+      }
+    }
+    this.memLearnings.delete(namespace);
+  }
+
+  async getLearningsCount(namespace: string): Promise<number> {
+    const redis = getRedis();
+    if (redis) {
+      try {
+        return await redis.llen(this.learningsKey(namespace));
+      } catch (err) {
+        logger.error("learnings:getLearningsCount Redis failed", err);
+      }
+    }
+    return (this.memLearnings.get(namespace) ?? []).length;
+  }
+}
+
 // ─── Singletons ──────────────────────────────────────────────────────────────
 
 export const jobStore = new JobStore();
 export const profileStore = new ProfileStore();
 export const planStore = new PlanStore();
+export const learningsStore = new LearningsStore();

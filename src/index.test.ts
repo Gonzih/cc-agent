@@ -102,6 +102,8 @@ describe("MCP server handlers", () => {
     expect(names).toContain("comment_on_issue");
     expect(names).toContain("close_issue");
     expect(names).toContain("approve_job");
+    expect(names).toContain("get_learnings");
+    expect(names).toContain("clear_learnings");
   });
 
   it("get_version returns a version string", async () => {
@@ -270,6 +272,37 @@ describe("MCP server handlers", () => {
     });
     const data = JSON.parse(result.content[0].text);
     expect(data.ok).toBe(true);
+  });
+
+  it("list_jobs includes learnings_count and namespace", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: { name: "list_jobs", arguments: {} },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(typeof data.learnings_count).toBe("number");
+    expect(typeof data.namespace).toBe("string");
+  });
+
+  it("get_learnings returns learnings array", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: { name: "get_learnings", arguments: {} },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(Array.isArray(data.learnings)).toBe(true);
+    expect(typeof data.namespace).toBe("string");
+    expect(typeof data.total).toBe("number");
+  });
+
+  it("clear_learnings returns ok", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: { name: "clear_learnings", arguments: {} },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(data.ok).toBe(true);
+    expect(typeof data.namespace).toBe("string");
   });
 
   it("cost_summary returns total_cost_usd, total_input_tokens, total_output_tokens, by_job", async () => {
