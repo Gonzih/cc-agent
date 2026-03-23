@@ -30,6 +30,7 @@ import { planStore, jobStore, learningsStore } from "./store.js";
 import { getNamespace } from "./namespace.js";
 import { initRedis } from "./redis.js";
 import { logger } from "./logger.js";
+import { listCcAgentContainers } from "./docker.js";
 import { v4 as uuidv4 } from "uuid";
 import { execFile } from "child_process";
 import { promisify } from "util";
@@ -137,6 +138,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "string",
             description:
               "Ollama host URL (default: 'http://localhost:11434'). Only used when ollama_model is set.",
+          },
+          docker_isolation: {
+            type: "boolean",
+            description:
+              "Run the agent in a fresh Docker container for full filesystem and process isolation. Requires Docker (colima or Docker Desktop) to be running. Falls back to host mode if Docker is unavailable. Default: false.",
           },
         },
         required: ["repo_url", "task"],
@@ -465,6 +471,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "docker_ps",
+      description: "List currently running cc-agent Docker containers. Shows container name, status, and uptime.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
       name: "spawn_from_profile",
       description: "Spawn an agent job from a saved profile. Supports variable interpolation and per-call overrides.",
       inputSchema: {
@@ -523,6 +534,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         model: a.model as string | undefined,
         ollamaModel: a.ollama_model as string | undefined,
         ollamaHost: a.ollama_host as string | undefined,
+        dockerIsolation: a.docker_isolation as boolean | undefined,
         requiresApproval: !isTrusted,
       });
 
@@ -1094,6 +1106,17 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         content: [{
           type: "text",
           text: JSON.stringify({ ok: true, namespace: ns, message: `Learnings cleared for namespace '${ns}'.` }),
+        }],
+      };
+    }
+
+    case "docker_ps": {
+      logger.info("tool:docker_ps");
+      const containers = await listCcAgentContainers();
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ containers, total: containers.length }),
         }],
       };
     }

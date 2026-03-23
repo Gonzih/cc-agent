@@ -1,0 +1,194 @@
+import { execFile, spawn } from "child_process";
+import { EventEmitter } from "events";
+import { promisify } from "util";
+import { logger } from "./logger.js";
+
+const execFileAsync = promisify(execFile);
+
+export async function isDockerAvailable(): Promise<boolean> {
+  try {
+    await execFileAsync("docker", ["info"], { timeout: 5000 } as Parameters<typeof execFileAsync>[2]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export interface DockerContainerInfo {
+  id: string;
+  name: string;
+  status: string;
+  uptime: string;
+}
+
+export async function listCcAgentContainers(): Promise<DockerContainerInfo[]> {
+  try {
+    const { stdout } = await execFileAsync("docker", [
+      "ps",
+      "--filter", "name=cc-agent-",
+      "--format", "{{.ID}}\t{{.Names}}\t{{.Status}}\t{{.RunningFor}}",
+    ]);
+    return stdout
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        const [id, name, status, uptime] = line.split("\t");
+        return { id: id ?? "", name: name ?? "", status: status ?? "", uptime: uptime ?? "" };
+      });
+  } catch {
+    return [];
+  }
+}
+
+export interface DockerAgentProcess extends EventEmitter {
+  kill(): void;
+  pid: undefined;
+  stdin: null;
+}
+
+/**
+ * Run a cc-agent job inside a Docker container.
+ *
+ * Emits:
+ *   "text"  (line: string)      — each line of container output
+ *   "exit"  (code: number)      — container exit code
+ *   "error" (err: unknown)      — fatal error before container starts
+ */
+export function runDockerAgent(opts: {
+  containerName: string;
+  repoUrl: string;
+  task: string;
+  anthropicToken?: string;
+  githubToken?: string;
+  namespace?: string;
+}): DockerAgentProcess {
+  const emitter = new EventEmitter() as DockerAgentProcess;
+  emitter.pid = undefined;
+  emitter.stdin = null;
+
+  let containerStarted = false;
+  let killed = false;
+
+  emitter.kill = () => {
+    killed = true;
+    if (containerStarted) {
+      execFile("docker", ["rm", "-f", opts.containerName], () => {});
+    }
+  };
+
+  void (async () => {
+    try {
+      // Build docker env args
+      const envArgs: string[] = [];
+      if (opts.anthropicToken) {
+        envArgs.push("-e", `ANTHROPIC_AUTH_TOKEN=${opts.anthropicToken}`);
+        envArgs.push("-e", `ANTHROPIC_API_KEY=${opts.anthropicToken}`);
+      }
+      if (opts.githubToken) {
+        envArgs.push("-e", `GITHUB_TOKEN=${opts.githubToken}`);
+        envArgs.push("-e", `GH_TOKEN=${opts.githubToken}`);
+      }
+      if (opts.namespace) {
+        envArgs.push("-e", `CC_AGENT_NAMESPACE=${opts.namespace}`);
+      }
+      envArgs.push("-e", "HOME=/root");
+      envArgs.push("-e", "GIT_CONFIG_GLOBAL=/dev/null");
+      // Pass task and repo via env to avoid shell quoting issues
+      envArgs.push("-e", `CC_DOCKER_TASK=${opts.task}`);
+      envArgs.push("-e", `CC_DOCKER_REPO=${opts.repoUrl}`);
+
+      const containerScript = [
+        "set -e",
+        // Install system deps (node:22 is Debian-based)
+        "apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq git curl >/dev/null 2>&1",
+        // Install gh CLI via direct binary download (amd64)
+        "GH_VERSION=2.65.0",
+        "ARCH=$(dpkg --print-architecture 2>/dev/null || echo amd64)",
+        "curl -fsSL \"https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${ARCH}.tar.gz\" -o /tmp/gh.tar.gz",
+        "tar -xzf /tmp/gh.tar.gz -C /tmp",
+        "mv /tmp/gh_${GH_VERSION}_linux_${ARCH}/bin/gh /usr/local/bin/",
+        // Install claude-code
+        "npm install -g @anthropic-ai/claude-code >/dev/null 2>&1",
+        // Configure git
+        "git config --global user.email 'cc-agent@localhost'",
+        "git config --global user.name 'cc-agent'",
+        // Configure HTTPS credential helper for GitHub token
+        "git config --global credential.helper '!f() { echo username=x-access-token; echo password=$GITHUB_TOKEN; }; f'",
+        // Clone repo
+        "git clone --depth 1 \"$CC_DOCKER_REPO\" /workspace",
+        "cd /workspace",
+        // Run Claude (dangerously-skip-permissions needed for non-interactive use)
+        "exec claude --dangerously-skip-permissions --print --output-format stream-json -p \"$CC_DOCKER_TASK\"",
+      ].join(" && ");
+
+      if (killed) return;
+
+      // Start container in detached mode
+      const { stdout: dockerIdRaw } = await execFileAsync("docker", [
+        "run", "-d",
+        "--name", opts.containerName,
+        ...envArgs,
+        "node:22",
+        "/bin/sh", "-c", containerScript,
+      ]);
+      const dockerId = dockerIdRaw.trim();
+      containerStarted = true;
+      logger.info("docker:container-started", { name: opts.containerName, id: dockerId });
+
+      if (killed) {
+        execFile("docker", ["rm", "-f", opts.containerName], () => {});
+        emitter.emit("exit", 1);
+        return;
+      }
+
+      // Stream logs from container
+      const logProc = spawn("docker", ["logs", "-f", opts.containerName], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+
+      let buf = "";
+      const onData = (data: Buffer): void => {
+        buf += data.toString();
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+          emitter.emit("text", line);
+        }
+      };
+      logProc.stdout?.on("data", onData);
+      logProc.stderr?.on("data", onData);
+
+      // Wait for container to finish
+      let exitCode = 0;
+      try {
+        const { stdout: waitOut } = await execFileAsync("docker", ["wait", opts.containerName]);
+        exitCode = parseInt(waitOut.trim(), 10);
+        if (isNaN(exitCode)) exitCode = 0;
+      } catch {
+        exitCode = 1;
+      }
+
+      // Drain remaining buffered output
+      if (buf.trim()) emitter.emit("text", buf);
+      logProc.kill();
+
+      // Cleanup container
+      containerStarted = false;
+      try {
+        await execFileAsync("docker", ["rm", "-f", opts.containerName]);
+      } catch {
+        // Best-effort cleanup
+      }
+
+      logger.info("docker:container-done", { name: opts.containerName, exitCode });
+      emitter.emit("exit", exitCode);
+    } catch (err) {
+      logger.error("docker:error", { name: opts.containerName, error: String(err) });
+      emitter.emit("error", err);
+      emitter.emit("exit", 1);
+    }
+  })();
+
+  return emitter;
+}

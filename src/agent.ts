@@ -12,6 +12,7 @@ import { ensureStateDirs, isPidAlive } from "./state.js";
 import { jobStore, learningsStore, type JobRecord } from "./store.js";
 import { getNamespace } from "./namespace.js";
 import { logger } from "./logger.js";
+import { isDockerAvailable, runDockerAgent } from "./docker.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -119,6 +120,7 @@ function toRecord(job: Job): JobRecord {
     variantIndex: job.variantIndex,
     parentVariant: job.parentVariant,
     siblings: job.siblings,
+    dockerIsolation: job.dockerIsolation,
   };
 }
 
@@ -154,6 +156,7 @@ function fromRecord(r: JobRecord): Job {
     variantIndex: r.variantIndex,
     parentVariant: r.parentVariant,
     siblings: r.siblings,
+    dockerIsolation: r.dockerIsolation,
   };
 }
 
@@ -168,6 +171,8 @@ export class JobManager {
   private defaultToken?: string;
   /** Jobs restored from storage — their output lives in store, not in job.output[]. */
   private restoredJobs = new Set<string>();
+  /** Active Docker container names for cleanup on exit. */
+  private activeDockerContainers = new Set<string>();
 
   constructor(token?: string) {
     this.defaultToken = token;
@@ -178,6 +183,10 @@ export class JobManager {
     setInterval(() => this.checkRestoredRunning(), 30 * 1000).unref();
     // Dependency scheduler — promote pending jobs when deps are done
     setInterval(() => this.tick(), 3000).unref();
+    // Clean up Docker containers on process exit
+    const cleanup = () => { void this.cleanupDockerContainers(); };
+    process.once("SIGTERM", cleanup);
+    process.once("SIGINT", cleanup);
   }
 
   /** Must be called after initRedis() at startup. */
@@ -294,6 +303,7 @@ export class JobManager {
       model: opts.model,
       ollamaModel: opts.ollamaModel,
       ollamaHost: opts.ollamaHost,
+      dockerIsolation: opts.dockerIsolation,
       status: initialStatus,
       output: [],
       toolCalls: [],
@@ -401,6 +411,12 @@ export class JobManager {
   }
 
   private async run(job: Job, token?: string): Promise<void> {
+    // Docker isolation mode: run the entire agent inside a fresh container
+    if (job.dockerIsolation) {
+      await this.runDockerIsolated(job, token);
+      return;
+    }
+
     // If resuming from sleep and the workDir still exists, skip clone/branch.
     const isResume = !!(job.workDir && existsSync(job.workDir));
     let workDir: string | undefined = isResume ? job.workDir : undefined;
@@ -556,6 +572,80 @@ export class JobManager {
     }
   }
 
+  private async runDockerIsolated(job: Job, token?: string): Promise<void> {
+    const dockerAvailable = await isDockerAvailable();
+    if (!dockerAvailable) {
+      logger.warn("docker:unavailable — falling back to host mode", { id: job.id });
+      this.addOutput(job, "[cc-agent] Docker unavailable — falling back to host mode");
+      job.dockerIsolation = false;
+      await this.run(job, token);
+      return;
+    }
+
+    const containerName = `cc-agent-${job.id.slice(0, 8)}`;
+    job.status = "running";
+    this.persistJob(job);
+    logger.info("job:docker-start", { id: job.id, containerName });
+    this.addOutput(job, `[cc-agent] Starting Docker container: ${containerName}`);
+
+    const githubToken = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
+    const namespace = getNamespace();
+
+    this.activeDockerContainers.add(containerName);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const proc = runDockerAgent({
+          containerName,
+          repoUrl: job.repoUrl,
+          task: injectPreamble(job.task, job.preamble),
+          anthropicToken: token,
+          githubToken,
+          namespace,
+        });
+
+        this.kills.set(job.id, () => proc.kill());
+
+        proc.on("text", (line: string) => {
+          if ((line as string).trim()) this.addOutput(job, line as string);
+        });
+
+        proc.on("error", (err: unknown) => { reject(err); });
+
+        proc.on("exit", (code: number) => {
+          job.exitCode = code ?? undefined;
+          this.kills.delete(job.id);
+          if (code === 0 || code === null) resolve();
+          else reject(new Error(`Docker container exited with code ${code}`));
+        });
+      });
+
+      job.status = "done";
+      logger.info("job:done", { id: job.id, exitCode: job.exitCode ?? 0, mode: "docker" });
+      this.addOutput(job, `[cc-agent] Done (Docker). Exit code: ${job.exitCode ?? 0}`);
+    } catch (err) {
+      job.status = "failed";
+      job.error = String(err);
+      logger.error("job:failed", { id: job.id, error: job.error, mode: "docker" });
+      this.addOutput(job, `[cc-agent] FAILED (Docker): ${job.error}`);
+    } finally {
+      this.activeDockerContainers.delete(containerName);
+      job.finishedAt = new Date();
+      this.persistJob(job);
+    }
+  }
+
+  private async cleanupDockerContainers(): Promise<void> {
+    if (this.activeDockerContainers.size === 0) return;
+    logger.info("docker:cleanup", { containers: Array.from(this.activeDockerContainers) });
+    const containers = Array.from(this.activeDockerContainers);
+    this.activeDockerContainers.clear();
+    await Promise.allSettled(
+      containers.map((name) =>
+        execFileAsync("docker", ["rm", "-f", name]).catch(() => {})
+      )
+    );
+  }
+
   private async writeModelRating(job: Job): Promise<void> {
     const ratingsDir = join(homedir(), ".cc-agent");
     await mkdir(ratingsDir, { recursive: true });
@@ -687,6 +777,7 @@ export class JobManager {
       variantIndex: j.variantIndex,
       parentVariant: j.parentVariant,
       siblings: j.siblings,
+      isolation: j.dockerIsolation ? "docker" as const : "host" as const,
     }));
   }
 
