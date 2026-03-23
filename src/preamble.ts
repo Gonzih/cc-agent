@@ -41,6 +41,20 @@ At the very end of your output, after all work is done, append a \`## LEARNINGS\
 
 This is not optional — every completed job must end with this block so the namespace accumulates institutional knowledge.
 
+### Smoke check before full implementation
+Before committing to a full implementation, run a quick sanity check (\`npm test\`, \`cargo test\`, \`go test ./...\`, etc.) to verify the foundation is solid. If the quick check fails (missing deps, broken toolchain, compile errors), report the failure immediately rather than spending time on a broken foundation.
+
+### Score reporting
+At the end of your output, report your quality score:
+\`\`\`
+AGENT_SCORE: <float 0.0-1.0>
+\`\`\`
+Scoring guide:
+- 1.0 = all tests pass, PR merged, task fully complete
+- 0.7 = partial completion, some tests failing
+- 0.4 = significant issues, task incomplete
+- 0.0 = complete failure
+
 ---
 
 `;

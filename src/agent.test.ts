@@ -96,7 +96,8 @@ vi.mock("./claude.js", async () => {
 });
 
 // Import after mocks are in place
-import { JobManager } from "./agent.js";
+import { JobManager, extractScore } from "./agent.js";
+import { execFile } from "child_process";
 
 describe("injectPreamble", () => {
   it("prepends the default preamble to the task", () => {
@@ -275,6 +276,105 @@ describe("JobManager", () => {
     const list = manager.list();
     const hostJob = list.find((j) => j.isolation === "host");
     expect(hostJob).toBeDefined();
+  });
+
+  it("spawn with smoke_test that fails sets status to failed with smoke test error", async () => {
+    const execFileMock = vi.mocked(execFile);
+    const original = execFileMock.getMockImplementation();
+    // Override: git calls succeed, sh (smoke test) fails
+    execFileMock.mockImplementation((_cmd: string, _args: string[], optsOrCb: any, cb?: any) => {
+      const callback = typeof optsOrCb === "function" ? optsOrCb : cb!;
+      if (_cmd === "sh") {
+        const err = Object.assign(new Error("exit 1"), { stdout: "", stderr: "Tests failed!" });
+        callback(err);
+      } else {
+        callback(null, "", "");
+      }
+    });
+
+    const id = await manager.spawn({
+      repoUrl: "https://github.com/test/repo.git",
+      task: "do stuff",
+      smokeTest: "npm test",
+    });
+
+    // Wait for async run to settle
+    await new Promise((r) => setTimeout(r, 200));
+
+    const job = manager.getJob(id);
+    expect(job!.status).toBe("failed");
+    expect(job!.error).toMatch(/smoke test failed/i);
+
+    // Restore original implementation
+    if (original) execFileMock.mockImplementation(original);
+    else execFileMock.mockRestore();
+  });
+
+  it("smoke_test that passes allows job to proceed to running", async () => {
+    // All execFile calls succeed (default mock behavior handles this, sh returns "" via the mock)
+    const id = await manager.spawn({
+      repoUrl: "https://github.com/test/repo.git",
+      task: "do stuff",
+      smokeTest: "echo ok",
+    });
+    // Job should start cloning/running (not immediately failed from smoke test)
+    const job = manager.getJob(id);
+    expect(job!.status).not.toBe("failed");
+  });
+});
+
+describe("extractScore", () => {
+  it("returns self_reported score from AGENT_SCORE line", () => {
+    const result = extractScore(["some output", "AGENT_SCORE: 0.85", "done"]);
+    expect(result.source).toBe("self_reported");
+    expect(result.score).toBe(0.85);
+  });
+
+  it("clamps self_reported score to [0, 1]", () => {
+    expect(extractScore(["AGENT_SCORE: 1.5"]).score).toBe(1.0);
+    expect(extractScore(["AGENT_SCORE: -0.5"]).score).toBe(0.0);
+  });
+
+  it("returns heuristic score with PR merged (+0.4)", () => {
+    const result = extractScore(["Successfully merged pull request #42"]);
+    expect(result.source).toBe("heuristic");
+    expect(result.score).toBeGreaterThanOrEqual(0.4);
+  });
+
+  it("returns heuristic score with all tests passing (+0.4)", () => {
+    const result = extractScore(["  42 passing"]);
+    expect(result.source).toBe("heuristic");
+    expect(result.score).toBeGreaterThanOrEqual(0.4);
+  });
+
+  it("returns 0.5 default for empty output", () => {
+    const result = extractScore([]);
+    expect(result.source).toBe("heuristic");
+    expect(result.score).toBe(0.5);
+  });
+
+  it("scores 0 when only ERROR appears in last 20 lines (no other positive signals)", () => {
+    const lines = Array(25).fill("ok").concat(["ERROR: something went wrong"]);
+    const result = extractScore(lines);
+    expect(result.source).toBe("heuristic");
+    // ERROR present → no +0.2, no PR, no tests → score = 0
+    expect(result.score).toBe(0);
+  });
+
+  it("awards +0.2 when last 20 lines have no ERROR/FAILED", () => {
+    const result = extractScore(["all good here", "tests ran fine"]);
+    expect(result.source).toBe("heuristic");
+    expect(result.score).toBeGreaterThanOrEqual(0.2);
+  });
+
+  it("prefers AGENT_SCORE over heuristics", () => {
+    const result = extractScore([
+      "Successfully merged pull request",
+      "AGENT_SCORE: 0.3",
+      "ERROR: something failed",
+    ]);
+    expect(result.source).toBe("self_reported");
+    expect(result.score).toBe(0.3);
   });
 });
 

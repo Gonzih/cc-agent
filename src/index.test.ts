@@ -237,6 +237,54 @@ describe("MCP server handlers", () => {
     ).rejects.toThrow("Unknown tool");
   });
 
+  it("get_job_status includes score and score_source fields", async () => {
+    const callHandler = capturedHandlers.get(CallToolRequestSchema)!;
+    // Spawn a job to get an ID
+    const spawnResult = await callHandler({
+      params: {
+        name: "spawn_agent",
+        arguments: { repo_url: "https://github.com/gonzih/repo.git", task: "test task" },
+      },
+    });
+    const { job_id } = JSON.parse(spawnResult.content[0].text);
+    const statusResult = await callHandler({
+      params: { name: "get_job_status", arguments: { job_id } },
+    });
+    const data = JSON.parse(statusResult.content[0].text);
+    expect("score" in data).toBe(true);
+    expect("score_source" in data).toBe(true);
+  });
+
+  it("list_jobs with min_score filter excludes unscored jobs", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: { name: "list_jobs", arguments: { min_score: 0.5 } },
+    });
+    const data = JSON.parse(result.content[0].text);
+    // All returned jobs must have a score >= 0.5 (unscored jobs should be excluded)
+    for (const job of data.jobs) {
+      expect(job.score).not.toBeNull();
+      expect(job.score).toBeGreaterThanOrEqual(0.5);
+    }
+  });
+
+  it("spawn_agent tool schema includes smoke_test parameter", async () => {
+    const handler = capturedHandlers.get(ListToolsRequestSchema)!;
+    const result = await handler({});
+    const spawnTool = result.tools.find((t: { name: string }) => t.name === "spawn_agent");
+    expect(spawnTool).toBeDefined();
+    expect(spawnTool.inputSchema.properties.smoke_test).toBeDefined();
+    expect(spawnTool.inputSchema.properties.smoke_test_timeout).toBeDefined();
+  });
+
+  it("list_jobs tool schema includes min_score parameter", async () => {
+    const handler = capturedHandlers.get(ListToolsRequestSchema)!;
+    const result = await handler({});
+    const listJobsTool = result.tools.find((t: { name: string }) => t.name === "list_jobs");
+    expect(listJobsTool).toBeDefined();
+    expect(listJobsTool.inputSchema.properties.min_score).toBeDefined();
+  });
+
   it("list_project_issues returns issues array", async () => {
     const handler = capturedHandlers.get(CallToolRequestSchema)!;
     const result = await handler({

@@ -78,6 +78,48 @@ function buildLearningsPreamble(learnings: string[]): string {
   return `## Prior Learnings in This Namespace (read before starting)\n${items}\n\n---\n\n`;
 }
 
+/** Extract a quality score from job output lines. Exported for testing. */
+export function extractScore(output: string[]): { score: number; source: "self_reported" | "heuristic" } {
+  // Check for self-reported score
+  for (const line of output) {
+    const m = line.match(/AGENT_SCORE:\s*(-?[0-9.]+)/);
+    if (m) {
+      const score = Math.min(1.0, Math.max(0.0, parseFloat(m[1])));
+      if (!isNaN(score)) return { score, source: "self_reported" };
+    }
+  }
+
+  // Heuristic scoring — nothing to detect from empty output
+  if (output.length === 0) return { score: 0.5, source: "heuristic" };
+
+  let score = 0;
+  const allOutput = output.join("\n");
+
+  // PR merged: +0.4
+  if (/pull request.*merged|successfully merged|squash.*merged/i.test(allOutput)) {
+    score += 0.4;
+  }
+
+  // Tests passing: +0.4 proportional to pass rate
+  const testMatch = allOutput.match(/(\d+) passing[^]*?(\d+) failing/);
+  if (testMatch) {
+    const passing = parseInt(testMatch[1]);
+    const failing = parseInt(testMatch[2]);
+    const total = passing + failing;
+    if (total > 0) score += 0.4 * (passing / total);
+  } else if (/\d+ passing/i.test(allOutput) && !/\d+ failing/i.test(allOutput)) {
+    score += 0.4;
+  }
+
+  // No ERROR or FAILED in last 20 lines: +0.2
+  const last20 = output.slice(-20).join("\n");
+  if (!/\bERROR\b|\bFAILED\b/.test(last20)) {
+    score += 0.2;
+  }
+
+  return { score: Math.min(1.0, Math.round(score * 1000) / 1000), source: "heuristic" };
+}
+
 function calculateCost(job: Job): number {
   const cost =
     ((job.totalInputTokens ?? 0) * PRICE_INPUT +
@@ -116,7 +158,8 @@ function toRecord(job: Job): JobRecord {
     approvalIssueUrl: job.approvalIssueUrl,
     approvalRepo: job.approvalRepo,
     approvalIssueNumber: job.approvalIssueNumber,
-    score: job.score,
+    score: job.score ?? null,
+    scoreSource: job.scoreSource ?? null,
     variantIndex: job.variantIndex,
     parentVariant: job.parentVariant,
     siblings: job.siblings,
@@ -153,6 +196,7 @@ function fromRecord(r: JobRecord): Job {
     approvalRepo: r.approvalRepo,
     approvalIssueNumber: r.approvalIssueNumber,
     score: r.score,
+    scoreSource: r.scoreSource,
     variantIndex: r.variantIndex,
     parentVariant: r.parentVariant,
     siblings: r.siblings,
@@ -304,6 +348,8 @@ export class JobManager {
       ollamaModel: opts.ollamaModel,
       ollamaHost: opts.ollamaHost,
       dockerIsolation: opts.dockerIsolation,
+      smokeTest: opts.smokeTest,
+      smokeTestTimeout: opts.smokeTestTimeout,
       status: initialStatus,
       output: [],
       toolCalls: [],
@@ -451,9 +497,32 @@ export class JobManager {
           await execFileAsync("git", ["checkout", "-b", auto], { cwd: workDir });
           this.addOutput(job, `[cc-agent] Created branch: ${auto}`);
         }
+
+        // 3. Smoke test gate (if provided)
+        if (job.smokeTest) {
+          const timeoutMs = (job.smokeTestTimeout ?? 60) * 1000;
+          this.addOutput(job, `[cc-agent] Running smoke test: ${job.smokeTest}`);
+          try {
+            await execFileAsync("sh", ["-c", job.smokeTest], {
+              cwd: workDir,
+              timeout: timeoutMs,
+            });
+            this.addOutput(job, `[cc-agent] Smoke test passed`);
+          } catch (smokeErr: any) {
+            const combined = (String(smokeErr.stdout ?? "") + String(smokeErr.stderr ?? "")).trim();
+            const reason = smokeErr.killed ? "timed out" : (combined.slice(0, 500) || String(smokeErr));
+            job.status = "failed";
+            job.error = `smoke test failed: ${reason}`;
+            job.finishedAt = new Date();
+            logger.warn("job:smoke-test-failed", { id: job.id, error: job.error });
+            this.addOutput(job, `[cc-agent] Smoke test FAILED: ${job.error}`);
+            this.persistJob(job);
+            return;
+          }
+        }
       }
 
-      // 3. Run Claude
+      // 4. Run Claude
       job.status = "running";
       this.persistJob(job);
       logger.info("job:running", { id: job.id, isResume });
@@ -534,8 +603,15 @@ export class JobManager {
         return;
       }
 
+      // Score the completed job (if not already manually scored via setJobScore)
+      if (job.score == null) {
+        const { score, source } = extractScore(job.output);
+        job.score = score;
+        job.scoreSource = source;
+      }
+
       job.status = "done";
-      logger.info("job:done", { id: job.id, exitCode: job.exitCode ?? 0, costUsd: job.costUsd });
+      logger.info("job:done", { id: job.id, exitCode: job.exitCode ?? 0, costUsd: job.costUsd, score: job.score, scoreSource: job.scoreSource });
       this.addOutput(job, `[cc-agent] Done. Exit code: ${job.exitCode ?? 0}`);
       this.persistJob(job);
 
@@ -552,6 +628,11 @@ export class JobManager {
       }
     } catch (err) {
       if (!sleepRequested) {
+        if (job.score == null) {
+          const { score, source } = extractScore(job.output);
+          job.score = score;
+          job.scoreSource = source;
+        }
         job.status = "failed";
         job.error = String(err);
         logger.error("job:failed", { id: job.id, error: job.error });
@@ -773,7 +854,8 @@ export class JobManager {
       totalOutputTokens: j.totalOutputTokens,
       totalCacheReadTokens: j.totalCacheReadTokens,
       totalCacheWriteTokens: j.totalCacheWriteTokens,
-      score: j.score,
+      score: j.score ?? null,
+      scoreSource: j.scoreSource ?? null,
       variantIndex: j.variantIndex,
       parentVariant: j.parentVariant,
       siblings: j.siblings,
