@@ -164,6 +164,7 @@ function toRecord(job: Job): JobRecord {
     parentVariant: job.parentVariant,
     siblings: job.siblings,
     dockerIsolation: job.dockerIsolation,
+    resumedFrom: job.resumedFrom,
   };
 }
 
@@ -201,6 +202,7 @@ function fromRecord(r: JobRecord): Job {
     parentVariant: r.parentVariant,
     siblings: r.siblings,
     dockerIsolation: r.dockerIsolation,
+    resumedFrom: r.resumedFrom,
   };
 }
 
@@ -248,7 +250,7 @@ export class JobManager {
     } else if (status === "running" || status === "cloning") {
         if (r.pid) {
           if (!isPidAlive(r.pid)) {
-            status = "failed";
+            status = "interrupted";
             error = (error ? error + "; " : "") + "Process not found after restart";
             finishedAt = finishedAt ?? new Date().toISOString();
           }
@@ -281,6 +283,32 @@ export class JobManager {
         this.scheduleApprovalPoll(job);
       }
     }
+
+    // Auto-respawn interrupted jobs from previous session
+    const interruptedJobs = Array.from(this.jobs.values()).filter((j) => j.status === "interrupted");
+    if (interruptedJobs.length > 0) {
+      logger.info(`[cc-agent] Resurrecting ${interruptedJobs.length} interrupted jobs from previous session`);
+      for (const old of interruptedJobs) {
+        const resumeTask =
+          `RESUMING interrupted job. The previous run was killed mid-task. ` +
+          `Check git log and GitHub PRs first — some work may already be committed. ` +
+          `Continue from where it left off.\n\n${old.task}`;
+        this.spawn({
+          repoUrl: old.repoUrl,
+          task: resumeTask,
+          branch: old.branch,
+          claudeToken: old.claudeToken,
+          maxBudgetUsd: old.maxBudgetUsd,
+          model: old.model,
+          ollamaModel: old.ollamaModel,
+          ollamaHost: old.ollamaHost,
+          preamble: old.preamble,
+          resumedFrom: old.id,
+        }).catch((err) => {
+          logger.error("job:resurrection-failed", { oldId: old.id, err });
+        });
+      }
+    }
   }
 
   private checkRestoredRunning(): void {
@@ -291,7 +319,7 @@ export class JobManager {
       if (job.status === "pending_approval") continue; // managed by approval poller
       if (job.status === "running" || job.status === "cloning") {
         if (!job.pid || !isPidAlive(job.pid)) {
-          job.status = "failed";
+          job.status = "interrupted";
           job.finishedAt = new Date();
           job.error = (job.error ? job.error + "; " : "") + "Process exited after MCP restart";
           logger.warn("job:process-died", { id, pid: job.pid });
@@ -357,6 +385,7 @@ export class JobManager {
       variantIndex: opts.variantIndex,
       parentVariant: opts.parentVariant,
       siblings: opts.siblings,
+      resumedFrom: opts.resumedFrom,
     };
     this.jobs.set(id, job);
     this.persistJob(job);
@@ -860,6 +889,7 @@ export class JobManager {
       parentVariant: j.parentVariant,
       siblings: j.siblings,
       isolation: j.dockerIsolation ? "docker" as const : "host" as const,
+      resumedFrom: j.resumedFrom,
     }));
   }
 

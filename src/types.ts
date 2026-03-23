@@ -1,6 +1,6 @@
 import type { Writable } from "stream";
 
-export type JobStatus = "pending" | "cloning" | "running" | "done" | "failed" | "cancelled" | "sleeping" | "pending_approval" | "rejected";
+export type JobStatus = "pending" | "cloning" | "running" | "done" | "failed" | "cancelled" | "sleeping" | "pending_approval" | "rejected" | "interrupted";
 
 export interface TokenUsage {
   inputTokens: number;
@@ -54,6 +54,7 @@ export interface Job {
   parentVariant?: string;      // job ID of the winning parent variant
   siblings?: string[];         // job IDs of parallel variants (for variant jobs)
   dockerIsolation?: boolean;   // run agent in an isolated Docker container
+  resumedFrom?: string;        // job ID this was auto-spawned to resume after interruption
 }
 
 export interface SpawnOptions {
@@ -77,6 +78,7 @@ export interface SpawnOptions {
   parentVariant?: string;
   siblings?: string[];
   dockerIsolation?: boolean;
+  resumedFrom?: string;
 }
 
 export interface JobSummary {
@@ -107,4 +109,5 @@ export interface JobSummary {
   parentVariant?: string;
   siblings?: string[];
   isolation?: "docker" | "host";
+  resumedFrom?: string;
 }
