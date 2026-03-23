@@ -1,14 +1,35 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { injectPreamble, DEFAULT_PREAMBLE } from "./preamble.js";
 
+const { mockIsPidAlive, mockJobStoreLoadAll } = vi.hoisted(() => ({
+  mockIsPidAlive: vi.fn(() => false),
+  mockJobStoreLoadAll: vi.fn(async () => [] as any[]),
+}));
+
 vi.mock("./state.js", () => ({
   ensureStateDirs: vi.fn(),
   loadPersistedJobs: vi.fn(() => []),
   savePersistedJobs: vi.fn(),
   appendLog: vi.fn(),
   readLogSync: vi.fn(() => []),
-  isPidAlive: vi.fn(() => false),
+  isPidAlive: mockIsPidAlive,
 }));
+
+vi.mock("./store.js", () => ({
+  jobStore: {
+    loadAll: mockJobStoreLoadAll,
+    saveJob: vi.fn(async () => {}),
+    updateJob: vi.fn(async () => {}),
+    getJob: vi.fn(async () => null),
+    listJobs: vi.fn(async () => []),
+    appendOutput: vi.fn(async () => {}),
+    getOutput: vi.fn(async () => []),
+  },
+  profileStore: {},
+  planStore: { savePlan: vi.fn(async () => {}) },
+}));
+
+vi.mock("./redis.js", () => ({ getRedis: vi.fn(() => null) }));
 
 vi.mock("child_process", async () => {
   return {
@@ -195,5 +216,67 @@ describe("JobManager", () => {
     const result = manager.sendMessage(id, "hello");
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/not running/i);
+  });
+});
+
+describe("JobManager.init() — PID reconciliation on restart", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockIsPidAlive.mockReturnValue(false);
+  });
+
+  it("leaves a running job with no stored PID as running (cannot verify)", async () => {
+    mockJobStoreLoadAll.mockResolvedValue([{
+      id: "job-no-pid",
+      status: "running",
+      repoUrl: "https://github.com/test/repo.git",
+      task: "some task",
+      startedAt: new Date().toISOString(),
+      recentTools: [],
+      outputLineCount: 0,
+      // pid intentionally absent
+    }]);
+    const m = new JobManager();
+    await m.init();
+    const job = m.getJob("job-no-pid");
+    expect(job?.status).toBe("running");
+  });
+
+  it("marks a running job with a dead PID as failed", async () => {
+    mockIsPidAlive.mockReturnValue(false);
+    mockJobStoreLoadAll.mockResolvedValue([{
+      id: "job-dead-pid",
+      status: "running",
+      repoUrl: "https://github.com/test/repo.git",
+      task: "some task",
+      startedAt: new Date().toISOString(),
+      pid: 99999,
+      recentTools: [],
+      outputLineCount: 0,
+    }]);
+    const m = new JobManager();
+    await m.init();
+    const job = m.getJob("job-dead-pid");
+    expect(job?.status).toBe("failed");
+    expect(job?.error).toMatch(/Process not found after restart/);
+  });
+
+  it("keeps a running job with an alive PID as running", async () => {
+    mockIsPidAlive.mockReturnValue(true);
+    mockJobStoreLoadAll.mockResolvedValue([{
+      id: "job-alive-pid",
+      status: "running",
+      repoUrl: "https://github.com/test/repo.git",
+      task: "some task",
+      startedAt: new Date().toISOString(),
+      pid: 12345,
+      recentTools: [],
+      outputLineCount: 0,
+    }]);
+    const m = new JobManager();
+    await m.init();
+    const job = m.getJob("job-alive-pid");
+    expect(job?.status).toBe("running");
+    expect(job?.error).toBeUndefined();
   });
 });
