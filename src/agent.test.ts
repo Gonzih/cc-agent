@@ -37,6 +37,26 @@ vi.mock("./store.js", () => ({
 
 vi.mock("./redis.js", () => ({ getRedis: vi.fn(() => null) }));
 
+vi.mock("./docker.js", async () => {
+  const { EventEmitter } = await import("events");
+  return {
+    isDockerAvailable: vi.fn(() => Promise.resolve(true)),
+    runDockerAgent: vi.fn(() => {
+      const emitter = new EventEmitter() as any;
+      emitter.kill = vi.fn();
+      emitter.pid = undefined;
+      emitter.stdin = null;
+      setTimeout(() => emitter.emit("exit", 0), 50);
+      return emitter;
+    }),
+    listCcAgentContainers: vi.fn(() => Promise.resolve([])),
+  };
+});
+
+vi.mock("./namespace.js", () => ({
+  getNamespace: vi.fn(() => "test-ns"),
+  jobIndexKey: vi.fn(() => "cca:jobs:index"),
+}));
 vi.mock("child_process", async () => {
   return {
     execFile: vi.fn(
@@ -222,6 +242,39 @@ describe("JobManager", () => {
     const result = manager.sendMessage(id, "hello");
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/not running/i);
+  });
+
+  it("spawn() with dockerIsolation stores isolation flag on job", async () => {
+    const id = await manager.spawn({
+      repoUrl: "https://github.com/test/repo.git",
+      task: "Docker task",
+      dockerIsolation: true,
+    });
+    const job = manager.getJob(id);
+    expect(job).toBeDefined();
+    expect(job!.dockerIsolation).toBe(true);
+  });
+
+  it("list() includes isolation field for docker jobs", async () => {
+    await manager.spawn({
+      repoUrl: "https://github.com/test/repo.git",
+      task: "Docker task",
+      dockerIsolation: true,
+    });
+    const list = manager.list();
+    expect(list.length).toBeGreaterThan(0);
+    const dockerJob = list.find((j) => j.isolation === "docker");
+    expect(dockerJob).toBeDefined();
+  });
+
+  it("list() includes isolation field 'host' for non-docker jobs", async () => {
+    await manager.spawn({
+      repoUrl: "https://github.com/test/repo.git",
+      task: "Host task",
+    });
+    const list = manager.list();
+    const hostJob = list.find((j) => j.isolation === "host");
+    expect(hostJob).toBeDefined();
   });
 });
 
