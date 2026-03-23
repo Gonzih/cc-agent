@@ -46,6 +46,10 @@ export interface Job {
   approvalIssueUrl?: string;   // GitHub issue URL for pending_approval jobs
   approvalRepo?: string;       // "owner/repo" for polling
   approvalIssueNumber?: number; // issue number for polling
+  score?: number;              // 0.0 to 1.0, set by evaluator or agent itself
+  variantIndex?: number;       // which variant (1, 2, 3) this job is
+  parentVariant?: string;      // job ID of the winning parent variant
+  siblings?: string[];         // job IDs of parallel variants (for variant jobs)
 }
 
 export interface SpawnOptions {
@@ -63,6 +67,9 @@ export interface SpawnOptions {
   ollamaModel?: string;
   ollamaHost?: string;
   requiresApproval?: boolean;
+  variantIndex?: number;
+  parentVariant?: string;
+  siblings?: string[];
 }
 
 export interface JobSummary {
@@ -87,4 +94,8 @@ export interface JobSummary {
   sleepUntil?: string;
   sleepReason?: string;
   approvalIssueUrl?: string;
+  score?: number;
+  variantIndex?: number;
+  parentVariant?: string;
+  siblings?: string[];
 }
