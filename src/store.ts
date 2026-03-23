@@ -61,7 +61,8 @@ export interface JobRecord {
   approvalIssueUrl?: string;
   approvalRepo?: string;
   approvalIssueNumber?: number;
-  score?: number;
+  score?: number | null;
+  scoreSource?: "self_reported" | "heuristic" | null;
   variantIndex?: number;
   parentVariant?: string;
   siblings?: string[];

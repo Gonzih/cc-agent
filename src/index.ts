@@ -144,6 +144,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             description:
               "Run the agent in a fresh Docker container for full filesystem and process isolation. Requires Docker (colima or Docker Desktop) to be running. Falls back to host mode if Docker is unavailable. Default: false.",
           },
+          smoke_test: {
+            type: "string",
+            description:
+              "Shell command to run as a cheap pre-check before the full task. If it exits non-zero or times out, the job fails immediately. Example: 'npm test -- --testPathPattern=smoke 2>&1 | tail -5'",
+          },
+          smoke_test_timeout: {
+            type: "number",
+            description:
+              "Timeout for the smoke test in seconds (default 60). Only used when smoke_test is set.",
+          },
         },
         required: ["repo_url", "task"],
       },
@@ -178,7 +188,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "list_jobs",
       description: "List all agent jobs (running, done, failed, cancelled).",
-      inputSchema: { type: "object", properties: {} },
+      inputSchema: {
+        type: "object",
+        properties: {
+          min_score: {
+            type: "number",
+            description: "Only return jobs with score >= this value (0.0–1.0). Unscored jobs are excluded when this filter is set.",
+          },
+        },
+      },
     },
     {
       name: "cancel_job",
@@ -535,6 +553,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         ollamaModel: a.ollama_model as string | undefined,
         ollamaHost: a.ollama_host as string | undefined,
         dockerIsolation: a.docker_isolation as boolean | undefined,
+        smokeTest: a.smoke_test as string | undefined,
+        smokeTestTimeout: a.smoke_test_timeout as number | undefined,
         requiresApproval: !isTrusted,
       });
 
@@ -619,6 +639,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
               cost_usd: job.costUsd,
               usage: job.usage,
               approval_issue_url: job.approvalIssueUrl,
+              score: job.score ?? null,
+              score_source: job.scoreSource ?? null,
             }),
           },
         ],
@@ -648,7 +670,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
     case "list_jobs": {
       logger.info("tool:list_jobs");
-      const jobs = (await jobStore.listJobs()) ?? [];
+      const minScore = typeof a.min_score === "number" ? a.min_score : undefined;
+      let jobs = (await jobStore.listJobs()) ?? [];
+      if (minScore !== undefined) {
+        jobs = jobs.filter((j) => j.score != null && j.score >= minScore);
+      }
       const namespace = getNamespace();
       const learnings_count = await learningsStore.getLearningsCount(namespace);
       return {
