@@ -56,6 +56,7 @@ export interface Job {
   siblings?: string[];         // job IDs of parallel variants (for variant jobs)
   dockerIsolation?: boolean;   // run agent in an isolated Docker container
   resumedFrom?: string;        // job ID this was auto-spawned to resume after interruption
+  tokenIndex?: number;         // which token index was active when job ran
 }
 
 export interface SpawnOptions {
@@ -80,7 +81,6 @@ export interface SpawnOptions {
   siblings?: string[];
   dockerIsolation?: boolean;
   resumedFrom?: string;
-  tokenIndex?: number;          // which token index was active when job ran
 }
 
 export interface JobSummary {
