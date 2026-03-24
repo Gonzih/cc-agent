@@ -295,6 +295,39 @@ describe("MCP server handlers", () => {
     expect(typeof data.total).toBe("number");
   });
 
+  it("list_project_issues schema exposes assignee filter and uses assignees JSON field", async () => {
+    const handler = capturedHandlers.get(ListToolsRequestSchema)!;
+    const result = await handler({});
+    const tool = result.tools.find((t: { name: string }) => t.name === "list_project_issues");
+    expect(tool).toBeDefined();
+    // Schema must expose the assignee filter parameter
+    expect(tool.inputSchema.properties.assignee).toBeDefined();
+    // The gh CLI must request the 'assignees' (plural) JSON field, not 'assignee' (singular)
+    // Verified by checking the tool description mentions the distinction
+    expect(tool.inputSchema.properties.assignee.description).toMatch(/assignees/);
+  });
+
+  it("list_project_issues passes --assignee flag when assignee filter provided", async () => {
+    const { execFile } = await import("child_process");
+    const execFileMock = vi.mocked(execFile);
+    execFileMock.mockClear();
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    await handler({
+      params: { name: "list_project_issues", arguments: { repo: "test/repo", assignee: "octocat" } },
+    });
+    const calls = execFileMock.mock.calls;
+    const listCall = calls.find((c) => c[0] === "gh" && (c[1] as string[])[1] === "list");
+    expect(listCall).toBeDefined();
+    const args = listCall![1] as string[];
+    expect(args).toContain("--assignee");
+    expect(args).toContain("octocat");
+    // Must request 'assignees' (plural) in --json fields, not 'assignee' (singular)
+    const jsonFlagIdx = args.indexOf("--json");
+    expect(jsonFlagIdx).toBeGreaterThan(-1);
+    expect(args[jsonFlagIdx + 1]).toContain("assignees");
+    expect(args[jsonFlagIdx + 1]).not.toMatch(/\bassignee\b(?!s)/);
+  });
+
   it("work_on_issue spawns an agent and returns job_id", async () => {
     const handler = capturedHandlers.get(CallToolRequestSchema)!;
     const result = await handler({
