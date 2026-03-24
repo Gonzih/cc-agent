@@ -1,13 +1,20 @@
 import { execFile, spawn } from "child_process";
 import { EventEmitter } from "events";
+import { homedir } from "os";
 import { promisify } from "util";
 import { logger } from "./logger.js";
 
 const execFileAsync = promisify(execFile);
 
+/** Returns env with DOCKER_HOST set to the colima socket (unless already set). */
+export function getDockerEnv(): NodeJS.ProcessEnv {
+  if (process.env.DOCKER_HOST) return process.env as NodeJS.ProcessEnv;
+  return { ...process.env, DOCKER_HOST: `unix://${homedir()}/.colima/default/docker.sock` };
+}
+
 export async function isDockerAvailable(): Promise<boolean> {
   try {
-    await execFileAsync("docker", ["info"], { timeout: 5000 } as Parameters<typeof execFileAsync>[2]);
+    await execFileAsync("docker", ["info"], { timeout: 5000, env: getDockerEnv() } as Parameters<typeof execFileAsync>[2]);
     return true;
   } catch {
     return false;
@@ -25,9 +32,9 @@ export async function listCcAgentContainers(): Promise<DockerContainerInfo[]> {
   try {
     const { stdout } = await execFileAsync("docker", [
       "ps",
-      "--filter", "name=cc-agent-",
+      "--filter", "label=cc-agent",
       "--format", "{{.ID}}\t{{.Names}}\t{{.Status}}\t{{.RunningFor}}",
-    ]);
+    ], { env: getDockerEnv() } as Parameters<typeof execFileAsync>[2]);
     return stdout
       .trim()
       .split("\n")
@@ -73,7 +80,7 @@ export function runDockerAgent(opts: {
   emitter.kill = () => {
     killed = true;
     if (containerStarted) {
-      execFile("docker", ["rm", "-f", opts.containerName], () => {});
+      execFile("docker", ["rm", "-f", opts.containerName], { env: getDockerEnv() }, () => {});
     }
   };
 
@@ -84,6 +91,7 @@ export function runDockerAgent(opts: {
       if (opts.anthropicToken) {
         envArgs.push("-e", `ANTHROPIC_AUTH_TOKEN=${opts.anthropicToken}`);
         envArgs.push("-e", `ANTHROPIC_API_KEY=${opts.anthropicToken}`);
+        envArgs.push("-e", `CLAUDE_CODE_OAUTH_TOKEN=${opts.anthropicToken}`);
       }
       if (opts.githubToken) {
         envArgs.push("-e", `GITHUB_TOKEN=${opts.githubToken}`);
@@ -128,16 +136,17 @@ export function runDockerAgent(opts: {
       const { stdout: dockerIdRaw } = await execFileAsync("docker", [
         "run", "-d",
         "--name", opts.containerName,
+        "--label", "cc-agent",
         ...envArgs,
-        "node:22",
+        "node:22-slim",
         "/bin/sh", "-c", containerScript,
-      ]);
+      ], { env: getDockerEnv() } as Parameters<typeof execFileAsync>[2]);
       const dockerId = dockerIdRaw.trim();
       containerStarted = true;
       logger.info("docker:container-started", { name: opts.containerName, id: dockerId });
 
       if (killed) {
-        execFile("docker", ["rm", "-f", opts.containerName], () => {});
+        execFile("docker", ["rm", "-f", opts.containerName], { env: getDockerEnv() }, () => {});
         emitter.emit("exit", 1);
         return;
       }
@@ -145,6 +154,7 @@ export function runDockerAgent(opts: {
       // Stream logs from container
       const logProc = spawn("docker", ["logs", "-f", opts.containerName], {
         stdio: ["ignore", "pipe", "pipe"],
+        env: getDockerEnv(),
       });
 
       let buf = "";
@@ -162,7 +172,7 @@ export function runDockerAgent(opts: {
       // Wait for container to finish
       let exitCode = 0;
       try {
-        const { stdout: waitOut } = await execFileAsync("docker", ["wait", opts.containerName]);
+        const { stdout: waitOut } = await execFileAsync("docker", ["wait", opts.containerName], { env: getDockerEnv() } as Parameters<typeof execFileAsync>[2]);
         exitCode = parseInt(waitOut.trim(), 10);
         if (isNaN(exitCode)) exitCode = 0;
       } catch {
@@ -176,7 +186,7 @@ export function runDockerAgent(opts: {
       // Cleanup container
       containerStarted = false;
       try {
-        await execFileAsync("docker", ["rm", "-f", opts.containerName]);
+        await execFileAsync("docker", ["rm", "-f", opts.containerName], { env: getDockerEnv() } as Parameters<typeof execFileAsync>[2]);
       } catch {
         // Best-effort cleanup
       }

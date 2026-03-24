@@ -999,7 +999,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       const repo = a.repo as string;
       const state = (a.state as string | undefined) ?? "open";
       const labels = a.labels as string[] | undefined;
-      const ghArgs = ["issue", "list", "--repo", repo, "--state", state, "--json", "number,title,body,labels,assignee,createdAt,url"];
+      const ghArgs = ["issue", "list", "--repo", repo, "--state", state, "--json", "number,title,body,labels,assignees,createdAt,url"];
       if (labels?.length) {
         for (const label of labels) ghArgs.push("--label", label);
       }
