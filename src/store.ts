@@ -68,6 +68,7 @@ export interface JobRecord {
   siblings?: string[];
   dockerIsolation?: boolean;
   resumedFrom?: string;
+  interruptedAt?: string;
 }
 
 export class JobStore {

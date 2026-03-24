@@ -48,6 +48,7 @@ export interface Job {
   approvalIssueNumber?: number; // issue number for polling
   score?: number | null;       // 0.0 to 1.0, set by evaluator, agent, or heuristic
   scoreSource?: "self_reported" | "heuristic" | null;
+  interruptedAt?: Date;        // set when status transitions to "interrupted"
   smokeTest?: string;          // shell command to run as cheap pre-check before full task
   smokeTestTimeout?: number;   // smoke test timeout in seconds (default 60)
   variantIndex?: number;       // which variant (1, 2, 3) this job is

@@ -165,6 +165,7 @@ function toRecord(job: Job): JobRecord {
     siblings: job.siblings,
     dockerIsolation: job.dockerIsolation,
     resumedFrom: job.resumedFrom,
+    interruptedAt: job.interruptedAt?.toISOString(),
   };
 }
 
@@ -203,6 +204,7 @@ function fromRecord(r: JobRecord): Job {
     siblings: r.siblings,
     dockerIsolation: r.dockerIsolation,
     resumedFrom: r.resumedFrom,
+    interruptedAt: r.interruptedAt ? new Date(r.interruptedAt) : undefined,
   };
 }
 
@@ -239,34 +241,40 @@ export class JobManager {
   async init(): Promise<void> {
     const records = await jobStore.loadAll();
     const updates: Array<JobRecord> = [];
+    let orphanCount = 0;
 
     for (const r of records) {
       let status = r.status;
       let error = r.error;
       let finishedAt = r.finishedAt;
+      let interruptedAt = r.interruptedAt;
 
       if (status === "pending_approval") {
-      // pending_approval jobs survive restarts — approval poller is rescheduled below
-    } else if (status === "running" || status === "cloning") {
-        if (r.pid) {
-          if (!isPidAlive(r.pid)) {
-            status = "interrupted";
-            error = (error ? error + "; " : "") + "Process not found after restart";
-            finishedAt = finishedAt ?? new Date().toISOString();
-          }
-          // else: process is alive — keep as running
+        // pending_approval jobs survive restarts — approval poller is rescheduled below
+      } else if (status === "running" || status === "cloning") {
+        const isAlive = r.pid ? isPidAlive(r.pid) : false;
+        if (!isAlive) {
+          status = "interrupted";
+          error = (error ? error + "; " : "") + "Process not found after restart";
+          finishedAt = finishedAt ?? new Date().toISOString();
+          interruptedAt = interruptedAt ?? new Date().toISOString();
+          orphanCount++;
         }
-        // else: no PID stored yet — can't verify liveness, leave as running
+        // else: process is alive — keep as running
       }
       // sleeping jobs survive restarts — wake timer is rescheduled below
 
-      const job = fromRecord({ ...r, status, error, finishedAt });
+      const job = fromRecord({ ...r, status, error, finishedAt, interruptedAt });
       this.jobs.set(job.id, job);
       this.restoredJobs.add(job.id);
 
       if (status !== r.status) {
-        updates.push({ ...r, status, error, finishedAt });
+        updates.push({ ...r, status, error, finishedAt, interruptedAt });
       }
+    }
+
+    if (orphanCount > 0) {
+      logger.info(`[cc-agent] ${orphanCount} orphaned running job${orphanCount === 1 ? "" : "s"} marked as interrupted`);
     }
 
     // Persist any status corrections back to store
@@ -283,32 +291,6 @@ export class JobManager {
         this.scheduleApprovalPoll(job);
       }
     }
-
-    // Auto-respawn interrupted jobs from previous session
-    const interruptedJobs = Array.from(this.jobs.values()).filter((j) => j.status === "interrupted");
-    if (interruptedJobs.length > 0) {
-      logger.info(`[cc-agent] Resurrecting ${interruptedJobs.length} interrupted jobs from previous session`);
-      for (const old of interruptedJobs) {
-        const resumeTask =
-          `RESUMING interrupted job. The previous run was killed mid-task. ` +
-          `Check git log and GitHub PRs first — some work may already be committed. ` +
-          `Continue from where it left off.\n\n${old.task}`;
-        this.spawn({
-          repoUrl: old.repoUrl,
-          task: resumeTask,
-          branch: old.branch,
-          claudeToken: old.claudeToken,
-          maxBudgetUsd: old.maxBudgetUsd,
-          model: old.model,
-          ollamaModel: old.ollamaModel,
-          ollamaHost: old.ollamaHost,
-          preamble: old.preamble,
-          resumedFrom: old.id,
-        }).catch((err) => {
-          logger.error("job:resurrection-failed", { oldId: old.id, err });
-        });
-      }
-    }
   }
 
   private checkRestoredRunning(): void {
@@ -321,6 +303,7 @@ export class JobManager {
         if (!job.pid || !isPidAlive(job.pid)) {
           job.status = "interrupted";
           job.finishedAt = new Date();
+          job.interruptedAt = job.interruptedAt ?? new Date();
           job.error = (job.error ? job.error + "; " : "") + "Process exited after MCP restart";
           logger.warn("job:process-died", { id, pid: job.pid });
           this.persistJob(job);
