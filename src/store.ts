@@ -67,6 +67,7 @@ export interface JobRecord {
   parentVariant?: string;
   siblings?: string[];
   dockerIsolation?: boolean;
+  isolation?: "docker" | "host";
   resumedFrom?: string;
   interruptedAt?: string;
 }

@@ -12,7 +12,7 @@ import { ensureStateDirs, isPidAlive } from "./state.js";
 import { jobStore, learningsStore, type JobRecord } from "./store.js";
 import { getNamespace } from "./namespace.js";
 import { logger } from "./logger.js";
-import { isDockerAvailable, runDockerAgent } from "./docker.js";
+import { isDockerAvailable, runDockerAgent, getDockerEnv } from "./docker.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -164,6 +164,7 @@ function toRecord(job: Job): JobRecord {
     parentVariant: job.parentVariant,
     siblings: job.siblings,
     dockerIsolation: job.dockerIsolation,
+    isolation: job.dockerIsolation ? "docker" : "host",
     resumedFrom: job.resumedFrom,
     interruptedAt: job.interruptedAt?.toISOString(),
   };
@@ -734,7 +735,7 @@ export class JobManager {
     this.activeDockerContainers.clear();
     await Promise.allSettled(
       containers.map((name) =>
-        execFileAsync("docker", ["rm", "-f", name]).catch(() => {})
+        execFileAsync("docker", ["rm", "-f", name], { env: getDockerEnv() } as Parameters<typeof execFileAsync>[2]).catch(() => {})
       )
     );
   }

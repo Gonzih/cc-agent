@@ -181,8 +181,11 @@ describe("runDockerAgent", () => {
     expect(argsStr).toContain("ANTHROPIC_AUTH_TOKEN=sk-test");
     expect(argsStr).toContain("GITHUB_TOKEN=ghp-test");
     expect(argsStr).toContain("CC_AGENT_NAMESPACE=test-ns");
+    expect(argsStr).toContain("CLAUDE_CODE_OAUTH_TOKEN=sk-test");
     expect(argsStr).toContain("--name");
     expect(argsStr).toContain("cc-agent-envtest");
-    expect(argsStr).toContain("node:22");
+    expect(argsStr).toContain("--label");
+    expect(argsStr).toContain("cc-agent");
+    expect(argsStr).toContain("node:22-slim");
   });
 });
