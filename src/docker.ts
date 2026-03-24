@@ -35,11 +35,11 @@ export async function listCcAgentContainers(): Promise<DockerContainerInfo[]> {
       "--filter", "label=cc-agent",
       "--format", "{{.ID}}\t{{.Names}}\t{{.Status}}\t{{.RunningFor}}",
     ], { env: getDockerEnv() } as Parameters<typeof execFileAsync>[2]);
-    return stdout
+    return (stdout as string)
       .trim()
       .split("\n")
       .filter(Boolean)
-      .map((line) => {
+      .map((line: string) => {
         const [id, name, status, uptime] = line.split("\t");
         return { id: id ?? "", name: name ?? "", status: status ?? "", uptime: uptime ?? "" };
       });
@@ -141,7 +141,7 @@ export function runDockerAgent(opts: {
         "node:22-slim",
         "/bin/sh", "-c", containerScript,
       ], { env: getDockerEnv() } as Parameters<typeof execFileAsync>[2]);
-      const dockerId = dockerIdRaw.trim();
+      const dockerId = (dockerIdRaw as string).trim();
       containerStarted = true;
       logger.info("docker:container-started", { name: opts.containerName, id: dockerId });
 
@@ -173,7 +173,7 @@ export function runDockerAgent(opts: {
       let exitCode = 0;
       try {
         const { stdout: waitOut } = await execFileAsync("docker", ["wait", opts.containerName], { env: getDockerEnv() } as Parameters<typeof execFileAsync>[2]);
-        exitCode = parseInt(waitOut.trim(), 10);
+        exitCode = parseInt((waitOut as string).trim(), 10);
         if (isNaN(exitCode)) exitCode = 0;
       } catch {
         exitCode = 1;
