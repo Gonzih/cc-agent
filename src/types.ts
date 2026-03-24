@@ -80,6 +80,7 @@ export interface SpawnOptions {
   siblings?: string[];
   dockerIsolation?: boolean;
   resumedFrom?: string;
+  tokenIndex?: number;          // which token index was active when job ran
 }
 
 export interface JobSummary {

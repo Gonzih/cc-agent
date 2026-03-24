@@ -31,6 +31,7 @@ import { getNamespace } from "./namespace.js";
 import { initRedis } from "./redis.js";
 import { logger } from "./logger.js";
 import { listCcAgentContainers } from "./docker.js";
+import { loadTokens, getTokenStatus } from "./tokens.js";
 import { v4 as uuidv4 } from "uuid";
 import { execFile } from "child_process";
 import { promisify } from "util";
@@ -492,6 +493,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "docker_ps",
       description: "List currently running cc-agent Docker containers. Shows container name, status, and uptime.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "list_token_status",
+      description: "List the status of all configured OAuth tokens (CLAUDE_TOKENS env var). Shows which token is currently active and how many are configured. Useful for diagnosing token rotation issues.",
       inputSchema: { type: "object", properties: {} },
     },
     {
@@ -1146,6 +1152,28 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         content: [{
           type: "text",
           text: JSON.stringify({ containers, total: containers.length }),
+        }],
+      };
+    }
+
+    case "list_token_status": {
+      logger.info("tool:list_token_status");
+      const tokens = loadTokens();
+      const status = await getTokenStatus();
+      const tokenList = tokens.map((t, i) => ({
+        index: i,
+        masked: t.length > 10 ? `${t.slice(0, 7)}...${t.slice(-3)}` : "***",
+        status: i < status.index ? "exhausted" : i === status.index ? "active" : "pending",
+      }));
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            tokens: tokenList,
+            current: status.index,
+            total: status.total,
+            allExhausted: status.allExhausted,
+          }),
         }],
       };
     }
