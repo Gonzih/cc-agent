@@ -384,7 +384,7 @@ describe("JobManager.init() — PID reconciliation on restart", () => {
     mockIsPidAlive.mockReturnValue(false);
   });
 
-  it("leaves a running job with no stored PID as running (cannot verify)", async () => {
+  it("marks a running job with no stored PID as interrupted (cannot verify liveness)", async () => {
     mockJobStoreLoadAll.mockResolvedValue([{
       id: "job-no-pid",
       status: "running",
@@ -398,7 +398,8 @@ describe("JobManager.init() — PID reconciliation on restart", () => {
     const m = new JobManager();
     await m.init();
     const job = m.getJob("job-no-pid");
-    expect(job?.status).toBe("running");
+    expect(job?.status).toBe("interrupted");
+    expect(job?.interruptedAt).toBeDefined();
   });
 
   it("marks a running job with a dead PID as interrupted", async () => {
@@ -418,6 +419,7 @@ describe("JobManager.init() — PID reconciliation on restart", () => {
     const job = m.getJob("job-dead-pid");
     expect(job?.status).toBe("interrupted");
     expect(job?.error).toMatch(/Process not found after restart/);
+    expect(job?.interruptedAt).toBeDefined();
   });
 
   it("keeps a running job with an alive PID as running", async () => {
@@ -439,7 +441,7 @@ describe("JobManager.init() — PID reconciliation on restart", () => {
     expect(job?.error).toBeUndefined();
   });
 
-  it("auto-respawns interrupted jobs with resumedFrom linking", async () => {
+  it("marks orphaned running jobs as interrupted and does NOT auto-resume", async () => {
     mockIsPidAlive.mockReturnValue(false);
     mockJobStoreLoadAll.mockResolvedValue([{
       id: "job-interrupted",
@@ -454,19 +456,16 @@ describe("JobManager.init() — PID reconciliation on restart", () => {
     const m = new JobManager();
     await m.init();
 
-    // Original job should be interrupted
+    // Original job should be interrupted with interruptedAt timestamp
     const originalJob = m.getJob("job-interrupted");
     expect(originalJob?.status).toBe("interrupted");
+    expect(originalJob?.interruptedAt).toBeDefined();
 
-    // A new resurrection job should have been spawned
+    // No resurrection job should have been spawned — user must resume manually
     const allJobs = m.list();
     const resurrectionSummary = allJobs.find((j) => j.resumedFrom === "job-interrupted");
-    expect(resurrectionSummary).toBeDefined();
-    expect(resurrectionSummary?.repoUrl).toBe("https://github.com/test/repo.git");
-    // Check full (non-truncated) task via getJob()
-    const resurrectionJob = m.getJob(resurrectionSummary!.id);
-    expect(resurrectionJob?.task).toMatch(/RESUMING interrupted job/);
-    expect(resurrectionJob?.task).toMatch(/fix the bug/);
+    expect(resurrectionSummary).toBeUndefined();
+    expect(allJobs).toHaveLength(1);
   });
 });
 
