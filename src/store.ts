@@ -70,6 +70,7 @@ export interface JobRecord {
   isolation?: "docker" | "host";
   resumedFrom?: string;
   interruptedAt?: string;
+  tokenIndex?: number;
 }
 
 export class JobStore {

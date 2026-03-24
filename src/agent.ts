@@ -13,6 +13,7 @@ import { jobStore, learningsStore, type JobRecord } from "./store.js";
 import { getNamespace } from "./namespace.js";
 import { logger } from "./logger.js";
 import { isDockerAvailable, runDockerAgent, getDockerEnv } from "./docker.js";
+import { getCurrentToken, rotateToken, getTokenStatus, resetTokens } from "./tokens.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -167,6 +168,7 @@ function toRecord(job: Job): JobRecord {
     isolation: job.dockerIsolation ? "docker" : "host",
     resumedFrom: job.resumedFrom,
     interruptedAt: job.interruptedAt?.toISOString(),
+    tokenIndex: job.tokenIndex,
   };
 }
 
@@ -206,6 +208,7 @@ function fromRecord(r: JobRecord): Job {
     dockerIsolation: r.dockerIsolation,
     resumedFrom: r.resumedFrom,
     interruptedAt: r.interruptedAt ? new Date(r.interruptedAt) : undefined,
+    tokenIndex: r.tokenIndex,
   };
 }
 
@@ -376,7 +379,8 @@ export class JobManager {
     logger.info("job:spawned", { id, status: job.status, repoUrl: opts.repoUrl });
 
     if (!isPending && !requiresApproval) {
-      this.run(job, opts.claudeToken ?? this.defaultToken).catch((err) => {
+      const effectiveToken = (opts.claudeToken ?? await getCurrentToken()) || this.defaultToken;
+      this.run(job, effectiveToken).catch((err) => {
         job.status = "failed";
         job.error = String(err);
         job.finishedAt = new Date();
@@ -446,7 +450,11 @@ export class JobManager {
   private doApprove(job: Job): void {
     logger.info("job:approved", { id: job.id });
     this.addOutput(job, "[cc-agent] Approved. Starting job...");
-    this.run(job, job.claudeToken ?? this.defaultToken).catch((err) => {
+    const runWithToken = async () => {
+      const token = (job.claudeToken ?? await getCurrentToken()) || this.defaultToken;
+      return this.run(job, token);
+    };
+    runWithToken().catch((err) => {
       job.status = "failed";
       job.error = String(err);
       job.finishedAt = new Date();
@@ -480,6 +488,7 @@ export class JobManager {
     const isResume = !!(job.workDir && existsSync(job.workDir));
     let workDir: string | undefined = isResume ? job.workDir : undefined;
     let sleepRequested = false;
+    let tokenRotationRequested = false;
 
     try {
       if (!isResume) {
@@ -579,17 +588,39 @@ export class JobManager {
 
         proc.on("text", (text) => {
           if (text.trim()) this.addOutput(job, text);
-          // Detect usage/rate limit messages and park the job as sleeping
-          if (!sleepRequested && job.output.length > 3 && isLimitMessage(text)) {
-            sleepRequested = true;
-            const wakeAt = parseResetTime(text);
-            job.status = "sleeping";
-            job.sleepUntil = wakeAt.toISOString();
-            job.sleepReason = text.trim().slice(0, 500);
-            this.persistJob(job);
-            logger.warn("job:sleeping", { id: job.id, sleepUntil: job.sleepUntil, triggeringText: text.trim().slice(0, 500) });
-            this.addOutput(job, `[cc-agent] Usage limit detected. Sleeping until ${job.sleepUntil}`);
-            proc.kill();
+          // Detect usage/rate limit messages — try rotating token first, then sleep
+          if (!sleepRequested && !tokenRotationRequested && job.output.length > 3 && isLimitMessage(text)) {
+            // Async: rotate token and decide whether to sleep or retry
+            (async () => {
+              await rotateToken();
+              const status = await getTokenStatus();
+              if (!status.allExhausted) {
+                tokenRotationRequested = true;
+                logger.warn("job:token-rotated", {
+                  id: job.id,
+                  newIndex: status.index,
+                  total: status.total,
+                });
+                this.addOutput(job, `[cc-agent] Token ${status.index}/${status.total} exhausted, rotating to next`);
+                job.tokenIndex = status.index;
+                this.persistJob(job);
+                proc.kill();
+              } else {
+                sleepRequested = true;
+                const wakeAt = parseResetTime(text);
+                job.status = "sleeping";
+                job.sleepUntil = wakeAt.toISOString();
+                job.sleepReason = text.trim().slice(0, 500);
+                this.persistJob(job);
+                logger.warn("job:sleeping", { id: job.id, sleepUntil: job.sleepUntil, triggeringText: text.trim().slice(0, 500) });
+                this.addOutput(job, `[cc-agent] All tokens exhausted. Sleeping until ${job.sleepUntil}`);
+                proc.kill();
+              }
+            })().catch(() => {
+              // Fallback: sleep as before
+              sleepRequested = true;
+              proc.kill();
+            });
           }
         });
 
@@ -604,11 +635,19 @@ export class JobManager {
           job.exitCode = code ?? undefined;
           job.stdinStream = null;
           this.kills.delete(job.id);
-          // Resolve on sleep (we killed the proc intentionally) or clean exit
-          if (sleepRequested || code === 0 || code === null) resolve();
+          // Resolve on sleep/rotation (we killed the proc intentionally) or clean exit
+          if (sleepRequested || tokenRotationRequested || code === 0 || code === null) resolve();
           else reject(new Error(`Claude exited with code ${code}`));
         });
       });
+
+      if (tokenRotationRequested) {
+        // Immediately re-run with the newly rotated token (no sleep)
+        const nextToken = (job.claudeToken ?? await getCurrentToken()) || this.defaultToken;
+        logger.info("job:token-rotation-restart", { id: job.id, tokenIndex: job.tokenIndex });
+        await this.run(job, nextToken);
+        return;
+      }
 
       if (sleepRequested) {
         // Park here — scheduleWake will re-invoke run() when the timer fires
@@ -640,7 +679,7 @@ export class JobManager {
         this.writeModelRating(job).catch(() => {});
       }
     } catch (err) {
-      if (!sleepRequested) {
+      if (!sleepRequested && !tokenRotationRequested) {
         if (job.score == null) {
           const { score, source } = extractScore(job.output);
           job.score = score;
@@ -653,7 +692,7 @@ export class JobManager {
         this.persistJob(job);
       }
     } finally {
-      if (!sleepRequested) {
+      if (!sleepRequested && !tokenRotationRequested) {
         job.finishedAt = new Date();
         this.persistJob(job);
         if (workDir) {
@@ -778,7 +817,13 @@ export class JobManager {
     job.sleepUntil = undefined;
     this.persistJob(job);
     this.addOutput(job, `[cc-agent] Waking up, resuming task...`);
-    this.run(job, job.claudeToken ?? this.defaultToken).catch((err) => {
+    const runWithToken = async () => {
+      // On wake after all-exhausted sleep, reset token counter so rotation starts fresh
+      await resetTokens();
+      const token = (job.claudeToken ?? await getCurrentToken()) || this.defaultToken;
+      return this.run(job, token);
+    };
+    runWithToken().catch((err) => {
       job.status = "failed";
       job.error = String(err);
       job.finishedAt = new Date();
