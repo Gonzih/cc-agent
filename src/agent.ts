@@ -274,7 +274,7 @@ export class JobManager {
     }
 
     if (orphanCount > 0) {
-      logger.info(`[cc-agent] ${orphanCount} orphaned running job${orphanCount === 1 ? "" : "s"} marked as interrupted`);
+      logger.info(`[cc-agent] Detected ${orphanCount} orphaned running jobs from previous session → marked as interrupted`);
     }
 
     // Persist any status corrections back to store
