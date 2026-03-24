@@ -390,6 +390,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           repo: { type: "string", description: "GitHub repo in owner/repo format" },
           state: { type: "string", enum: ["open", "closed", "all"], description: "Issue state filter (default: open)" },
           labels: { type: "array", items: { type: "string" }, description: "Filter by labels (optional)" },
+          assignee: { type: "string", description: "Filter by assignee login (optional). Uses gh --assignee flag; the returned JSON field is 'assignees' (plural)." },
         },
         required: ["repo"],
       },
@@ -999,10 +1000,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       const repo = a.repo as string;
       const state = (a.state as string | undefined) ?? "open";
       const labels = a.labels as string[] | undefined;
+      const assignee = a.assignee as string | undefined;
       const ghArgs = ["issue", "list", "--repo", repo, "--state", state, "--json", "number,title,body,labels,assignees,createdAt,url"];
       if (labels?.length) {
         for (const label of labels) ghArgs.push("--label", label);
       }
+      if (assignee) ghArgs.push("--assignee", assignee);
       try {
         const { stdout } = await execFileAsync("gh", ghArgs);
         const issues = JSON.parse(stdout.trim() || "[]");
