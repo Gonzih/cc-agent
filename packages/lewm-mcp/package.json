@@ -1,0 +1,42 @@
+{
+  "name": "lewm-mcp",
+  "version": "0.1.0",
+  "description": "MCP server exposing LeWorldModel (LeWM) inference API to Claude and other MCP clients",
+  "type": "module",
+  "bin": {
+    "lewm-mcp": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "node --loader ts-node/esm src/index.ts",
+    "prepublishOnly": "npm run build",
+    "test": "vitest run"
+  },
+  "files": [
+    "dist/",
+    "README.md"
+  ],
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "lewm",
+    "world-model",
+    "inference",
+    "ai"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.28.0"
+  },
+  "devDependencies": {
+    "@types/node": "25.5.0",
+    "typescript": "6.0.2",
+    "vitest": "4.1.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
