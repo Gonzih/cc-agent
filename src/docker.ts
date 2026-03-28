@@ -180,6 +180,9 @@ export function runDockerAgent(opts: {
         "git config --system credential.helper '!f() { echo username=x-access-token; echo password=$GITHUB_TOKEN; }; f'",
         // Create non-root user (Claude Code refuses --dangerously-skip-permissions as root)
         "useradd -m -u 1000 -s /bin/bash agent",
+        // Grant passwordless sudo so the agent can self-provision tools
+        "apt-get install -y -qq sudo >/dev/null 2>&1",
+        "echo 'agent ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers",
         // Copy host credentials from /root (mounted volumes) into agent's home directory
         "[ -f /root/.gitconfig ] && cp /root/.gitconfig /home/agent/.gitconfig && chown agent:agent /home/agent/.gitconfig || true",
         "[ -d /root/.ssh ] && cp -r /root/.ssh /home/agent/.ssh && chown -R agent:agent /home/agent/.ssh || true",
