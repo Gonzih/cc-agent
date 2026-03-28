@@ -179,7 +179,7 @@ export function runDockerAgent(opts: {
         // Configure HTTPS credential helper for GitHub token (system level)
         "git config --system credential.helper '!f() { echo username=x-access-token; echo password=$GITHUB_TOKEN; }; f'",
         // Create non-root user (Claude Code refuses --dangerously-skip-permissions as root)
-        "useradd -m -u 1000 -s /bin/bash agent",
+        "useradd -m -s /bin/bash agent",
         // Grant passwordless sudo so the agent can self-provision tools
         "apt-get install -y -qq sudo >/dev/null 2>&1",
         "echo 'agent ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers",
