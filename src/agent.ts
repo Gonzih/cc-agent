@@ -776,6 +776,7 @@ export class JobManager {
     }
 
     const containerName = `cc-agent-${job.id.slice(0, 8)}`;
+    this.addOutput(job, `[cc-agent] Docker isolation requested — spawning container ${containerName}`);
     job.status = "running";
     this.persistJob(job);
     logger.info("job:docker-start", { id: job.id, containerName });
