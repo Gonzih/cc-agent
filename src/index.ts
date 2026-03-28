@@ -143,7 +143,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           docker_isolation: {
             type: "boolean",
             description:
-              "Run the agent in a fresh Docker container for full filesystem and process isolation. Requires Docker (colima or Docker Desktop) to be running. Falls back to host mode if Docker is unavailable. Default: false.",
+              "Run agent in Docker container for isolation. Default: false. Requires Docker to be running. On macOS, Docker runs in a VM — use only when isolation is specifically needed.",
           },
           smoke_test: {
             type: "string",
@@ -559,7 +559,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         model: a.model as string | undefined,
         ollamaModel: a.ollama_model as string | undefined,
         ollamaHost: a.ollama_host as string | undefined,
-        dockerIsolation: a.docker_isolation as boolean | undefined,
+        dockerIsolation: a.docker_isolation === true, // explicit: only true when literally true
         smokeTest: a.smoke_test as string | undefined,
         smokeTestTimeout: a.smoke_test_timeout as number | undefined,
         requiresApproval: !isTrusted,
