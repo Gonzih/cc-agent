@@ -48,7 +48,10 @@ const MACOS_NATIVE_TASK_PATTERNS = [
 ];
 
 /** Returns true when Docker isolation should be skipped for this job. */
-export function shouldSkipDocker(job: Pick<Job, "repoUrl" | "task"> & { requiresDocker?: boolean }): boolean {
+export function shouldSkipDocker(job: Pick<Job, "repoUrl" | "task"> & { requiresDocker?: boolean; dockerIsolation?: boolean }): boolean {
+  // Explicit opt-in always wins — never skip if the user requested docker isolation
+  if (job.dockerIsolation) return false;
+
   // On non-Linux (e.g. macOS), Docker isolation is opt-IN; skip unless explicitly required
   if (process.platform !== "linux" && !job.requiresDocker) {
     return true;
