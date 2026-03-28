@@ -80,6 +80,7 @@ export interface SpawnOptions {
   parentVariant?: string;
   siblings?: string[];
   dockerIsolation?: boolean;
+  requiresDocker?: boolean;
   resumedFrom?: string;
 }
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { injectPreamble, DEFAULT_PREAMBLE } from "./preamble.js";
 
 const { mockIsPidAlive, mockJobStoreLoadAll } = vi.hoisted(() => ({
@@ -96,7 +96,7 @@ vi.mock("./claude.js", async () => {
 });
 
 // Import after mocks are in place
-import { JobManager, extractScore } from "./agent.js";
+import { JobManager, extractScore, shouldSkipDocker, DOCKER_PREAMBLE } from "./agent.js";
 import { execFile } from "child_process";
 
 describe("injectPreamble", () => {
@@ -469,3 +469,57 @@ describe("JobManager.init() — PID reconciliation on restart", () => {
   });
 });
 
+describe("shouldSkipDocker", () => {
+  const originalPlatform = process.platform;
+
+  function setPlatform(p: string) {
+    Object.defineProperty(process, "platform", { value: p, configurable: true });
+  }
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+  });
+
+  it("returns true for simorgh-app repo URL", () => {
+    setPlatform("linux");
+    expect(shouldSkipDocker({ repoUrl: "https://github.com/org/simorgh-app", task: "normal task" })).toBe(true);
+  });
+
+  it("returns true for task containing 'mlx'", () => {
+    setPlatform("linux");
+    expect(shouldSkipDocker({ repoUrl: "https://github.com/org/myrepo", task: "train the model using mlx" })).toBe(true);
+  });
+
+  it("returns false for a normal node.js coding task on linux", () => {
+    setPlatform("linux");
+    expect(shouldSkipDocker({ repoUrl: "https://github.com/org/myrepo", task: "fix the bug in the api handler" })).toBe(false);
+  });
+
+  it("returns true on macOS platform for a generic task (opt-in behavior)", () => {
+    setPlatform("darwin");
+    expect(shouldSkipDocker({ repoUrl: "https://github.com/org/myrepo", task: "fix the bug" })).toBe(true);
+  });
+
+  it("returns false on macOS when requiresDocker is true", () => {
+    setPlatform("darwin");
+    expect(shouldSkipDocker({ repoUrl: "https://github.com/org/myrepo", task: "fix the bug", requiresDocker: true })).toBe(false);
+  });
+
+  it("returns true for leworldmodel repo", () => {
+    setPlatform("linux");
+    expect(shouldSkipDocker({ repoUrl: "https://github.com/org/leworldmodel", task: "train it" })).toBe(true);
+  });
+
+  it("returns true for task containing 'xcode'", () => {
+    setPlatform("linux");
+    expect(shouldSkipDocker({ repoUrl: "https://github.com/org/myrepo", task: "open in xcode and build" })).toBe(true);
+  });
+});
+
+describe("DOCKER_PREAMBLE", () => {
+  it("contains expected Docker container instructions", () => {
+    expect(DOCKER_PREAMBLE).toContain("DOCKER CONTAINER MODE");
+    expect(DOCKER_PREAMBLE).toContain("isolated Docker container");
+    expect(DOCKER_PREAMBLE).toContain("apt-get install");
+  });
+});
