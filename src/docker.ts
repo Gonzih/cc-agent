@@ -178,13 +178,21 @@ export function runDockerAgent(opts: {
         "git config --system user.name 'cc-agent'",
         // Configure HTTPS credential helper for GitHub token (system level)
         "git config --system credential.helper '!f() { echo username=x-access-token; echo password=$GITHUB_TOKEN; }; f'",
-        // Inject npm token if provided and no ~/.npmrc already present
-        "if [ -n \"$NPM_TOKEN\" ] && [ ! -f /root/.npmrc ]; then echo \"//registry.npmjs.org/:_authToken=${NPM_TOKEN}\" > /root/.npmrc; fi",
-        // Clone repo
-        "git clone --depth 1 \"$CC_DOCKER_REPO\" /workspace",
-        "cd /workspace",
-        // Run Claude (dangerously-skip-permissions needed for non-interactive use)
-        "exec claude --dangerously-skip-permissions --print --output-format stream-json -p \"$CC_DOCKER_TASK\"",
+        // Create non-root user (Claude Code refuses --dangerously-skip-permissions as root)
+        "useradd -m -u 1000 -s /bin/bash agent",
+        // Copy host credentials from /root (mounted volumes) into agent's home directory
+        "[ -f /root/.gitconfig ] && cp /root/.gitconfig /home/agent/.gitconfig && chown agent:agent /home/agent/.gitconfig || true",
+        "[ -d /root/.ssh ] && cp -r /root/.ssh /home/agent/.ssh && chown -R agent:agent /home/agent/.ssh || true",
+        "[ -f /root/.npmrc ] && cp /root/.npmrc /home/agent/.npmrc && chown agent:agent /home/agent/.npmrc || true",
+        // Inject npm token if provided and no .npmrc present for agent user
+        "if [ -n \"$NPM_TOKEN\" ] && [ ! -f /home/agent/.npmrc ]; then echo \"//registry.npmjs.org/:_authToken=${NPM_TOKEN}\" > /home/agent/.npmrc && chown agent:agent /home/agent/.npmrc; fi",
+        // Prepare workspace owned by agent
+        "mkdir -p /workspace && chown agent:agent /workspace",
+        // Write agent run script to avoid su -c quoting issues with task content
+        "printf '#!/bin/bash\\nset -e\\nexport HOME=/home/agent\\ngit clone --depth 1 \"$CC_DOCKER_REPO\" /workspace\\ncd /workspace\\nexec claude --dangerously-skip-permissions --print --output-format stream-json -p \"$CC_DOCKER_TASK\"\\n' > /home/agent/run.sh",
+        "chmod +x /home/agent/run.sh && chown agent:agent /home/agent/run.sh",
+        // Run as non-root agent user, preserving env vars (ANTHROPIC_API_KEY, GITHUB_TOKEN, etc.)
+        "exec su -p agent /home/agent/run.sh",
       ].join(" && ");
 
       if (killed) return;

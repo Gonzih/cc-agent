@@ -189,6 +189,37 @@ describe("runDockerAgent", () => {
     expect(argsStr).toContain("node:22-slim");
   });
 
+  it("runs claude as non-root agent user to satisfy --dangerously-skip-permissions", async () => {
+    const customPromisify = (mockExecFileFn as any)[PROMISIFY_CUSTOM];
+    const capturedArgs: string[][] = [];
+
+    customPromisify.mockImplementation(async (_cmd: string, args: string[]) => {
+      capturedArgs.push(args);
+      if (args[0] === "run") return { stdout: "cid\n", stderr: "" };
+      if (args[0] === "wait") return { stdout: "0\n", stderr: "" };
+      return { stdout: "", stderr: "" };
+    });
+
+    const spawnEmitter = makeSpawnEmitter();
+    mockSpawnFn.mockReturnValue(spawnEmitter);
+
+    const proc = runDockerAgent({
+      containerName: "cc-agent-nonroottest",
+      repoUrl: "https://github.com/test/repo",
+      task: "test",
+    });
+
+    await new Promise<void>((resolve) => { proc.on("exit", () => resolve()); });
+
+    const runArgs = capturedArgs.find((a) => a[0] === "run");
+    expect(runArgs).toBeDefined();
+    const script = runArgs!.join(" ");
+    expect(script).toContain("useradd");
+    expect(script).toContain("su -p agent /home/agent/run.sh");
+    // Claude runs inside run.sh (as agent user), not directly in the root script
+    expect(script).toContain("printf");
+  });
+
   it("passes IN_DOCKER=true and DOCKER_CONTAINER=1 to docker run", async () => {
     const customPromisify = (mockExecFileFn as any)[PROMISIFY_CUSTOM];
     const capturedArgs: string[][] = [];
