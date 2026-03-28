@@ -20,10 +20,11 @@ const execFileAsync = promisify(execFile);
 const JOB_TTL_MS = 60 * 60 * 1000; // 1 hour — clean up old done jobs from memory
 
 export const DOCKER_PREAMBLE = `[DOCKER CONTAINER MODE]
-You are running inside an isolated Docker container. You have root access.
-- Install any system packages you need freely: apt-get install -y <pkg>
-- Install global npm packages: npm install -g <pkg>
-- Install Python packages: pip install <pkg>
+You are running inside an isolated Docker container as user 'agent'.
+You have passwordless sudo access — install any system packages you need freely:
+  sudo apt-get install -y <package>
+  sudo npm install -g <package>
+  sudo pip install <package>
 - The container is ephemeral — don't worry about cleanup or side effects
 - Git, gh CLI, npm, and SSH credentials are already injected from the host
 - Focus on the task — the environment is yours to modify freely
