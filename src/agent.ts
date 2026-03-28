@@ -627,6 +627,7 @@ export class JobManager {
         proc.on("tool", (name: string) => {
           job.toolCalls.push(name);
           if (job.toolCalls.length > 50) job.toolCalls = job.toolCalls.slice(-50);
+          this.addOutput(job, `[tool] ${name}`);
         });
 
         proc.on("error", (err) => { reject(err); });

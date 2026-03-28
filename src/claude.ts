@@ -199,7 +199,12 @@ function extractToolName(msg: ClaudeMessage): string | null {
   if (Array.isArray(content)) {
     for (const block of content as Array<Record<string, unknown>>) {
       if (block.type === "tool_use" && typeof block.name === "string") {
-        return block.name;
+        const name = block.name;
+        const input = (block.input as Record<string, unknown>) || {};
+        const arg = input.file_path || input.path || input.command ||
+                    input.pattern || input.query || input.url || '';
+        const argStr = typeof arg === 'string' ? ` ${arg.slice(0, 60)}` : '';
+        return `${name}${argStr}`;
       }
     }
   }
