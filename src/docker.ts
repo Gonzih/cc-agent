@@ -141,6 +141,9 @@ export function runDockerAgent(opts: {
         envArgs.push("-e", `CC_AGENT_NAMESPACE=${opts.namespace}`);
       }
       envArgs.push("-e", "HOME=/root");
+      // Agent self-awareness: let the container know it's isolated
+      envArgs.push("-e", "IN_DOCKER=true");
+      envArgs.push("-e", "DOCKER_CONTAINER=1");
       // Pass task and repo via env to avoid shell quoting issues
       envArgs.push("-e", `CC_DOCKER_TASK=${opts.task}`);
       envArgs.push("-e", `CC_DOCKER_REPO=${opts.repoUrl}`);

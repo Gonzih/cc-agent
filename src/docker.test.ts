@@ -188,4 +188,33 @@ describe("runDockerAgent", () => {
     expect(argsStr).toContain("cc-agent");
     expect(argsStr).toContain("node:22-slim");
   });
+
+  it("passes IN_DOCKER=true and DOCKER_CONTAINER=1 to docker run", async () => {
+    const customPromisify = (mockExecFileFn as any)[PROMISIFY_CUSTOM];
+    const capturedArgs: string[][] = [];
+
+    customPromisify.mockImplementation(async (_cmd: string, args: string[]) => {
+      capturedArgs.push(args);
+      if (args[0] === "run") return { stdout: "cid\n", stderr: "" };
+      if (args[0] === "wait") return { stdout: "0\n", stderr: "" };
+      return { stdout: "", stderr: "" };
+    });
+
+    const spawnEmitter = makeSpawnEmitter();
+    mockSpawnFn.mockReturnValue(spawnEmitter);
+
+    const proc = runDockerAgent({
+      containerName: "cc-agent-inDockerTest",
+      repoUrl: "https://github.com/test/repo",
+      task: "test",
+    });
+
+    await new Promise<void>((resolve) => { proc.on("exit", () => resolve()); });
+
+    const runArgs = capturedArgs.find((a) => a[0] === "run");
+    expect(runArgs).toBeDefined();
+    const argsStr = runArgs!.join(" ");
+    expect(argsStr).toContain("IN_DOCKER=true");
+    expect(argsStr).toContain("DOCKER_CONTAINER=1");
+  });
 });

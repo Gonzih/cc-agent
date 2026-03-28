@@ -19,6 +19,54 @@ const execFileAsync = promisify(execFile);
 
 const JOB_TTL_MS = 60 * 60 * 1000; // 1 hour — clean up old done jobs from memory
 
+export const DOCKER_PREAMBLE = `[DOCKER CONTAINER MODE]
+You are running inside an isolated Docker container. You have root access.
+- Install any system packages you need freely: apt-get install -y <pkg>
+- Install global npm packages: npm install -g <pkg>
+- Install Python packages: pip install <pkg>
+- The container is ephemeral — don't worry about cleanup or side effects
+- Git, gh CLI, npm, and SSH credentials are already injected from the host
+- Focus on the task — the environment is yours to modify freely
+---
+
+`;
+
+const MACOS_NATIVE_REPO_PATTERNS = [
+  /simorgh-app/i,
+  /leworldmodel/i,
+  /lewm/i,
+  /expo-app/i,
+];
+
+const MACOS_NATIVE_TASK_PATTERNS = [
+  /\bmlx\b/i,
+  /\bmetal\b/i,
+  /\bcore ml\b/i,
+  /\bapple silicon\b/i,
+  /\bxcode\b/i,
+  /\bsimulator\b/i,
+];
+
+/** Returns true when Docker isolation should be skipped for this job. */
+export function shouldSkipDocker(job: Pick<Job, "repoUrl" | "task"> & { requiresDocker?: boolean }): boolean {
+  // On non-Linux (e.g. macOS), Docker isolation is opt-IN; skip unless explicitly required
+  if (process.platform !== "linux" && !job.requiresDocker) {
+    return true;
+  }
+
+  // Skip for macOS-native repo URLs
+  if (MACOS_NATIVE_REPO_PATTERNS.some((p) => p.test(job.repoUrl))) {
+    return true;
+  }
+
+  // Skip for tasks that involve macOS-native tooling
+  if (MACOS_NATIVE_TASK_PATTERNS.some((p) => p.test(job.task))) {
+    return true;
+  }
+
+  return false;
+}
+
 // Claude Sonnet 4.6 pricing (USD per 1M tokens)
 const PRICE_INPUT = 3.00;
 const PRICE_OUTPUT = 15.00;
@@ -330,9 +378,10 @@ export class JobManager {
     // Prepend prior namespace learnings to the task
     const namespace = getNamespace();
     const priorLearnings = await learningsStore.getLearnings(namespace, 5);
-    const task = priorLearnings.length
+    let task = priorLearnings.length
       ? buildLearningsPreamble(priorLearnings) + opts.task
       : opts.task;
+
 
     const id = uuidv4();
     const pendingDeps = opts.dependsOn?.filter((depId) => {
@@ -480,8 +529,14 @@ export class JobManager {
   private async run(job: Job, token?: string): Promise<void> {
     // Docker isolation mode: run the entire agent inside a fresh container
     if (job.dockerIsolation) {
-      await this.runDockerIsolated(job, token);
-      return;
+      if (shouldSkipDocker(job)) {
+        logger.info("[cc-agent] Skipping Docker isolation — native macOS/ML workload detected", { id: job.id });
+        this.addOutput(job, "[cc-agent] Skipping Docker isolation — native macOS/ML workload detected");
+        // Fall through to host mode without mutating job.dockerIsolation
+      } else {
+        await this.runDockerIsolated(job, token);
+        return;
+      }
     }
 
     // If resuming from sleep and the workDir still exists, skip clone/branch.
@@ -731,7 +786,7 @@ export class JobManager {
         const proc = runDockerAgent({
           containerName,
           repoUrl: job.repoUrl,
-          task: injectPreamble(job.task, job.preamble),
+          task: injectPreamble(DOCKER_PREAMBLE + job.task, job.preamble),
           anthropicToken: token,
           githubToken,
           namespace,
