@@ -2,6 +2,22 @@ import type { Writable } from "stream";
 
 export type JobStatus = "pending" | "cloning" | "running" | "done" | "failed" | "cancelled" | "sleeping" | "pending_approval" | "rejected" | "interrupted";
 
+export interface JobEvent {
+  jobId: string;
+  status: string;
+  title: string;
+  repoUrl: string;
+  lastLines: string[];   // last 5 lines from job output
+  score?: number;
+  timestamp: number;
+}
+
+export interface OnComplete {
+  repo_url: string;
+  task: string;
+  branch?: string;
+}
+
 export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
@@ -57,6 +73,7 @@ export interface Job {
   dockerIsolation?: boolean;   // run agent in an isolated Docker container
   resumedFrom?: string;        // job ID this was auto-spawned to resume after interruption
   tokenIndex?: number;         // which token index was active when job ran
+  onComplete?: OnComplete;     // spawn a follow-up job when this one finishes with status=done
 }
 
 export interface SpawnOptions {
@@ -82,6 +99,7 @@ export interface SpawnOptions {
   dockerIsolation?: boolean;
   requiresDocker?: boolean;
   resumedFrom?: string;
+  onComplete?: OnComplete;     // spawn a follow-up job when this one finishes with status=done
 }
 
 export interface JobSummary {
