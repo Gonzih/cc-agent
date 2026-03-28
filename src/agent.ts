@@ -7,13 +7,14 @@ import { promisify } from "util";
 import { v4 as uuidv4 } from "uuid";
 import { runClaude } from "./claude.js";
 import { injectPreamble, BROWSER_HINT, CODE_QUALITY_CHECKLIST, isCodeTask } from "./preamble.js";
-import type { Job, JobSummary, SpawnOptions } from "./types.js";
+import type { Job, JobSummary, SpawnOptions, JobEvent } from "./types.js";
 import { ensureStateDirs, isPidAlive } from "./state.js";
 import { jobStore, learningsStore, type JobRecord } from "./store.js";
 import { getNamespace } from "./namespace.js";
 import { logger } from "./logger.js";
 import { isDockerAvailable, runDockerAgent, getDockerEnv } from "./docker.js";
 import { getCurrentToken, rotateToken, getTokenStatus, resetTokens } from "./tokens.js";
+import { getRedis } from "./redis.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -260,6 +261,7 @@ function toRecord(job: Job): JobRecord {
     resumedFrom: job.resumedFrom,
     interruptedAt: job.interruptedAt?.toISOString(),
     tokenIndex: job.tokenIndex,
+    onComplete: job.onComplete,
   };
 }
 
@@ -300,6 +302,7 @@ function fromRecord(r: JobRecord): Job {
     resumedFrom: r.resumedFrom,
     interruptedAt: r.interruptedAt ? new Date(r.interruptedAt) : undefined,
     tokenIndex: r.tokenIndex,
+    onComplete: r.onComplete,
   };
 }
 
@@ -412,6 +415,28 @@ export class JobManager {
     jobStore.saveJob(toRecord(job)).catch(() => {});
   }
 
+  private publishJobEvent(job: Job): void {
+    const redis = getRedis();
+    if (!redis) return;
+    (async () => {
+      try {
+        const lastLines = await redis.lrange(`cca:job:${job.id}:output`, -5, -1);
+        const event: JobEvent = {
+          jobId: job.id,
+          status: job.status,
+          title: job.task.split('\n')[0].slice(0, 120),
+          repoUrl: job.repoUrl,
+          lastLines,
+          score: job.score ?? undefined,
+          timestamp: Date.now(),
+        };
+        await redis.publish('cca:events', JSON.stringify(event));
+      } catch (err) {
+        logger.warn('job:event-publish-failed', { id: job.id, err: String(err) });
+      }
+    })();
+  }
+
   private addOutput(job: Job, text: string): void {
     const lines = text.split('\n');
     for (const line of lines) {
@@ -481,6 +506,7 @@ export class JobManager {
       parentVariant: opts.parentVariant,
       siblings: opts.siblings,
       resumedFrom: opts.resumedFrom,
+      onComplete: opts.onComplete,
     };
     this.jobs.set(id, job);
     this.persistJob(job);
@@ -532,6 +558,7 @@ export class JobManager {
         logger.info("job:approval-timeout", { id: job.id });
         this.addOutput(job, "[cc-agent] Approval timed out after 24 hours. Job rejected.");
         this.persistJob(job);
+        this.publishJobEvent(job);
         return;
       }
 
@@ -653,6 +680,7 @@ export class JobManager {
             logger.warn("job:smoke-test-failed", { id: job.id, error: job.error });
             this.addOutput(job, `[cc-agent] Smoke test FAILED: ${job.error}`);
             this.persistJob(job);
+            this.publishJobEvent(job);
             return;
           }
         }
@@ -675,6 +703,7 @@ export class JobManager {
       // 4. Run Claude
       job.status = "running";
       this.persistJob(job);
+      this.publishJobEvent(job);
       logger.info("job:running", { id: job.id, isResume });
       this.addOutput(job, isResume
         ? `[cc-agent] Resuming Claude after sleep...`
@@ -740,6 +769,7 @@ export class JobManager {
                 job.sleepUntil = wakeAt.toISOString();
                 job.sleepReason = text.trim().slice(0, 500);
                 this.persistJob(job);
+                this.publishJobEvent(job);
                 logger.warn("job:sleeping", { id: job.id, sleepUntil: job.sleepUntil, triggeringText: text.trim().slice(0, 500) });
                 this.addOutput(job, `[cc-agent] All tokens exhausted. Sleeping until ${job.sleepUntil}`);
                 proc.kill();
@@ -795,6 +825,20 @@ export class JobManager {
       logger.info("job:done", { id: job.id, exitCode: job.exitCode ?? 0, costUsd: job.costUsd, score: job.score, scoreSource: job.scoreSource });
       this.addOutput(job, `[cc-agent] Done. Exit code: ${job.exitCode ?? 0}`);
       this.persistJob(job);
+      this.publishJobEvent(job);
+
+      // Trigger onComplete chain if configured
+      if (job.onComplete) {
+        const oc = job.onComplete;
+        this.spawn({ repoUrl: oc.repo_url, task: oc.task, branch: oc.branch }).then((childId) => {
+          logger.info("job:oncomplete-spawned", { parentId: job.id, childId });
+          this.addOutput(job, `[cc-agent] onComplete: spawned child job ${childId}`);
+        }).catch((err) => {
+          logger.warn("job:oncomplete-spawn-failed", { parentId: job.id, err: String(err) });
+          this.addOutput(job, `[cc-agent] onComplete spawn failed: ${String(err)}`);
+          this.publishJobEvent(job);
+        });
+      }
 
       // Extract and store learnings scoped to the repo
       const learnings = extractLearnings(job.output);
@@ -822,6 +866,7 @@ export class JobManager {
         logger.error("job:failed", { id: job.id, error: job.error });
         this.addOutput(job, `[cc-agent] FAILED: ${job.error}`);
         this.persistJob(job);
+        this.publishJobEvent(job);
       }
     } finally {
       if (!sleepRequested && !tokenRotationRequested) {
@@ -897,6 +942,18 @@ export class JobManager {
       this.activeDockerContainers.delete(containerName);
       job.finishedAt = new Date();
       this.persistJob(job);
+      this.publishJobEvent(job);
+      // Trigger onComplete chain if job finished successfully
+      if (job.status === "done" && job.onComplete) {
+        const oc = job.onComplete;
+        this.spawn({ repoUrl: oc.repo_url, task: oc.task, branch: oc.branch }).then((childId) => {
+          logger.info("job:oncomplete-spawned", { parentId: job.id, childId });
+          this.addOutput(job, `[cc-agent] onComplete: spawned child job ${childId}`);
+        }).catch((err2) => {
+          logger.warn("job:oncomplete-spawn-failed", { parentId: job.id, err: String(err2) });
+          this.addOutput(job, `[cc-agent] onComplete spawn failed: ${String(err2)}`);
+        });
+      }
     }
   }
 
@@ -992,6 +1049,7 @@ export class JobManager {
         job.finishedAt = new Date();
         logger.warn("job:dep-failed", { id: job.id });
         this.persistJob(job);
+        this.publishJobEvent(job);
       } else if (allDone) {
         logger.info("job:promoting", { id: job.id });
         this.promote(job);
@@ -1117,6 +1175,7 @@ export class JobManager {
     logger.info("job:cancelled", { id });
     this.addOutput(job, "[cc-agent] Cancelled by user.");
     this.persistJob(job);
+    this.publishJobEvent(job);
     return true;
   }
 

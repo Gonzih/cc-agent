@@ -1,10 +1,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { injectPreamble, DEFAULT_PREAMBLE } from "./preamble.js";
 
-const { mockIsPidAlive, mockJobStoreLoadAll } = vi.hoisted(() => ({
-  mockIsPidAlive: vi.fn(() => false),
-  mockJobStoreLoadAll: vi.fn(async () => [] as any[]),
-}));
+const { mockIsPidAlive, mockJobStoreLoadAll, mockGetRedis, mockRedisPublish, mockRedisLrange } = vi.hoisted(() => {
+  const mockRedisPublish = vi.fn(async () => 0);
+  const mockRedisLrange = vi.fn(async () => [] as string[]);
+  const mockRedisFull = { publish: mockRedisPublish, lrange: mockRedisLrange };
+  return {
+    mockIsPidAlive: vi.fn(() => false),
+    mockJobStoreLoadAll: vi.fn(async () => [] as any[]),
+    mockGetRedis: vi.fn(() => null as typeof mockRedisFull | null),
+    mockRedisPublish,
+    mockRedisLrange,
+  };
+});
 
 vi.mock("./state.js", () => ({
   ensureStateDirs: vi.fn(),
@@ -35,7 +43,7 @@ vi.mock("./store.js", () => ({
   },
 }));
 
-vi.mock("./redis.js", () => ({ getRedis: vi.fn(() => null) }));
+vi.mock("./redis.js", () => ({ getRedis: mockGetRedis }));
 
 vi.mock("./docker.js", async () => {
   const { EventEmitter } = await import("events");
@@ -521,5 +529,170 @@ describe("DOCKER_PREAMBLE", () => {
     expect(DOCKER_PREAMBLE).toContain("DOCKER CONTAINER MODE");
     expect(DOCKER_PREAMBLE).toContain("isolated Docker container");
     expect(DOCKER_PREAMBLE).toContain("apt-get install");
+  });
+});
+
+describe("Redis pub/sub job events", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockIsPidAlive.mockReturnValue(false);
+    mockJobStoreLoadAll.mockResolvedValue([]);
+    mockRedisPublish.mockResolvedValue(0);
+    mockRedisLrange.mockResolvedValue(["line1", "line2"]);
+    // Enable Redis for these tests
+    mockGetRedis.mockReturnValue({ publish: mockRedisPublish, lrange: mockRedisLrange } as any);
+  });
+
+  afterEach(() => {
+    mockGetRedis.mockReturnValue(null);
+  });
+
+  it("publishes a JobEvent to cca:events when job transitions to done", async () => {
+    const manager = new JobManager();
+    const id = await manager.spawn({
+      repoUrl: "https://github.com/test/repo.git",
+      task: "Test pub/sub",
+    });
+
+    // Wait for the async run to settle (claude mock emits exit after 50ms)
+    await new Promise((r) => setTimeout(r, 200));
+
+    const job = manager.getJob(id);
+    expect(job?.status).toBe("done");
+
+    // At least one publish call should have happened
+    expect(mockRedisPublish).toHaveBeenCalled();
+    // Find the 'done' event publish for THIS job specifically
+    const calls = mockRedisPublish.mock.calls;
+    const doneCall = calls.find((c) => {
+      try {
+        const evt = JSON.parse(c[1] as string);
+        return evt.status === "done" && evt.jobId === id;
+      } catch { return false; }
+    });
+    expect(doneCall).toBeDefined();
+    const event = JSON.parse(doneCall![1] as string);
+    expect(event.jobId).toBe(id);
+    expect(event.status).toBe("done");
+    expect(event.repoUrl).toBe("https://github.com/test/repo.git");
+    expect(typeof event.timestamp).toBe("number");
+    expect(Array.isArray(event.lastLines)).toBe(true);
+    expect(doneCall![0]).toBe("cca:events");
+  });
+
+  it("publishes event with correct title (first line of task)", async () => {
+    const manager = new JobManager();
+    await manager.spawn({
+      repoUrl: "https://github.com/test/repo.git",
+      task: "My job title\n\nMore details here",
+    });
+
+    await new Promise((r) => setTimeout(r, 200));
+
+    const doneCall = mockRedisPublish.mock.calls.find((c) => {
+      try { return JSON.parse(c[1] as string).status === "done"; } catch { return false; }
+    });
+    expect(doneCall).toBeDefined();
+    const event = JSON.parse(doneCall![1] as string);
+    expect(event.title).toBe("My job title");
+  });
+
+  it("does not crash if Redis is unavailable (getRedis returns null)", async () => {
+    mockGetRedis.mockReturnValue(null);
+    const manager = new JobManager();
+    const id = await manager.spawn({
+      repoUrl: "https://github.com/test/repo.git",
+      task: "No redis test",
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    const job = manager.getJob(id);
+    // Job should still complete normally even without Redis
+    expect(job?.status).toBe("done");
+    expect(mockRedisPublish).not.toHaveBeenCalled();
+  });
+});
+
+describe("onComplete spawn chaining", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockIsPidAlive.mockReturnValue(false);
+    mockJobStoreLoadAll.mockResolvedValue([]);
+    mockGetRedis.mockReturnValue(null);
+  });
+
+  it("spawns a child job when parent transitions to done with onComplete set", async () => {
+    const manager = new JobManager();
+    const parentId = await manager.spawn({
+      repoUrl: "https://github.com/test/repo.git",
+      task: "Parent task",
+      onComplete: {
+        repo_url: "https://github.com/test/child-repo.git",
+        task: "Child task",
+      },
+    });
+
+    // Wait for parent to finish (claude mock emits exit after 50ms)
+    await new Promise((r) => setTimeout(r, 300));
+
+    const parent = manager.getJob(parentId);
+    expect(parent?.status).toBe("done");
+
+    // A child job should have been spawned
+    const allJobs = manager.list();
+    expect(allJobs.length).toBe(2);
+    const child = allJobs.find((j) => j.id !== parentId);
+    expect(child).toBeDefined();
+    expect(child!.repoUrl).toBe("https://github.com/test/child-repo.git");
+    expect(child!.task).toContain("Child task");
+  });
+
+  it("does not spawn a child job when parent transitions to failed", async () => {
+    const { runClaude: mockRunClaude } = await import("./claude.js");
+    const { EventEmitter } = await import("events");
+    vi.mocked(mockRunClaude).mockImplementationOnce(() => {
+      const emitter = new EventEmitter() as any;
+      emitter.kill = vi.fn();
+      emitter.pid = 12345;
+      emitter.stdin = null;
+      setTimeout(() => emitter.emit("exit", 1), 50); // non-zero exit = failure
+      return emitter;
+    });
+
+    const manager = new JobManager();
+    await manager.spawn({
+      repoUrl: "https://github.com/test/repo.git",
+      task: "Failing parent task",
+      onComplete: {
+        repo_url: "https://github.com/test/child-repo.git",
+        task: "Should not spawn",
+      },
+    });
+
+    await new Promise((r) => setTimeout(r, 200));
+
+    const allJobs = manager.list();
+    // Only the parent — no child spawned
+    expect(allJobs.length).toBe(1);
+    expect(allJobs[0].status).toBe("failed");
+  });
+
+  it("onComplete respects optional branch field", async () => {
+    const manager = new JobManager();
+    const parentId = await manager.spawn({
+      repoUrl: "https://github.com/test/repo.git",
+      task: "Parent with branch",
+      onComplete: {
+        repo_url: "https://github.com/test/child-repo.git",
+        task: "Child with branch",
+        branch: "feature/child",
+      },
+    });
+
+    await new Promise((r) => setTimeout(r, 300));
+
+    const allJobs = manager.list();
+    const child = allJobs.find((j) => j.id !== parentId);
+    expect(child).toBeDefined();
+    expect(child!.branch).toBe("feature/child");
   });
 });
