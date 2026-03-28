@@ -406,9 +406,12 @@ export class JobManager {
     // Prepend prior repo learnings to the task
     const rk = repoKey(opts.repoUrl);
     const priorLearnings = await learningsStore.getLearnings(rk, 5);
-    let task = priorLearnings.length
-      ? buildLearningsPreamble(priorLearnings, rk) + opts.task
-      : opts.task;
+    let task = opts.task;
+    if (priorLearnings.length) {
+      const firstLine = opts.task.split('\n')[0];
+      const restOfTask = opts.task.slice(firstLine.length);
+      task = `${firstLine}\n\n${buildLearningsPreamble(priorLearnings, rk)}${restOfTask}`;
+    }
 
 
     const id = uuidv4();
