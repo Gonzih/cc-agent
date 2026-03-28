@@ -59,6 +59,16 @@ Scoring guide:
 
 `;
 
+export const BROWSER_HINT = `\n\n## Browser Tool Available\nUse \`$B URL\` to read any live webpage via Playwright (100ms, real Chromium, ARIA refs). Example: \`$B https://github.com/owner/repo\`\n`;
+
+export const CODE_QUALITY_CHECKLIST = `\n\n## Code Quality Checklist (check before submitting PR)\n- [ ] No LLM output used as direct code/shell input without validation\n- [ ] Async operations have error handlers (no unhandled promise rejections)\n- [ ] No secrets/tokens hardcoded — use env vars\n- [ ] Tests added for new logic\n- [ ] Build passes before PR\n`;
+
+const CODE_TASK_PATTERN = /\b(build|implement|add|create|fix)\b/i;
+
+export function isCodeTask(task: string): boolean {
+  return CODE_TASK_PATTERN.test(task);
+}
+
 export function injectPreamble(task: string, customPreamble?: string): string {
   const preamble = customPreamble ?? DEFAULT_PREAMBLE;
   return preamble + task;
