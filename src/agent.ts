@@ -373,9 +373,12 @@ export class JobManager {
     jobStore.saveJob(toRecord(job)).catch(() => {});
   }
 
-  private addOutput(job: Job, line: string): void {
-    job.output.push(line);
-    jobStore.appendOutput(job.id, line).catch(() => {});
+  private addOutput(job: Job, text: string): void {
+    const lines = text.split('\n');
+    for (const line of lines) {
+      job.output.push(line);
+      jobStore.appendOutput(job.id, line).catch(() => {});
+    }
   }
 
   async spawn(opts: SpawnOptions): Promise<string> {
