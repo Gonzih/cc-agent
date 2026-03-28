@@ -23,7 +23,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { JobManager, repoKey } from "./agent.js";
+import { JobManager, repoKey, normalizeRepoUrl } from "./agent.js";
 import { buildEvaluatorTask } from "./evaluator.js";
 import { loadProfiles, upsertProfile, deleteProfile, getProfile, interpolate } from "./profiles.js";
 import { planStore, jobStore, learningsStore } from "./store.js";
@@ -544,7 +544,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
   switch (name) {
     case "spawn_agent": {
-      const repoUrl = a.repo_url as string;
+      const repoUrl = normalizeRepoUrl(a.repo_url as string);
       logger.info("tool:spawn_agent", { repo_url: repoUrl, task: (a.task as string)?.slice(0, 80) });
 
       const owner = extractGithubOwner(repoUrl);
@@ -776,7 +776,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
       await upsertProfile({
         name: profileName,
-        repoUrl: a.repo_url as string,
+        repoUrl: normalizeRepoUrl(a.repo_url as string),
         taskTemplate: a.task_template as string,
         defaultBudgetUsd: a.default_budget_usd as number | undefined,
         branch: a.branch as string | undefined,
@@ -883,7 +883,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             const branchName = step.create_branch ? `${step.create_branch}-v${i}` : undefined;
             variantBranches.push(branchName);
             const jobId = await manager.spawn({
-              repoUrl: step.repo_url,
+              repoUrl: normalizeRepoUrl(step.repo_url),
               task: step.task,
               createBranch: branchName,
               dependsOn: resolvedDeps,
@@ -907,7 +907,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           });
 
           const evalJobId = await manager.spawn({
-            repoUrl: step.repo_url,
+            repoUrl: normalizeRepoUrl(step.repo_url),
             task: evalTask,
             dependsOn: variantJobIds,
           });
@@ -934,7 +934,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         } else {
           // Standard single job
           const jobId = await manager.spawn({
-            repoUrl: step.repo_url,
+            repoUrl: normalizeRepoUrl(step.repo_url),
             task: step.task,
             createBranch: step.create_branch,
             dependsOn: resolvedDeps,
@@ -1049,7 +1049,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
 
       // Normalize repo to full URL
-      const repoUrl = repo.startsWith("http") ? repo : `https://github.com/${repo}`;
+      const repoUrl = normalizeRepoUrl(repo.startsWith("http") ? repo : `https://github.com/${repo}`);
 
       // Build task
       const taskLines = [

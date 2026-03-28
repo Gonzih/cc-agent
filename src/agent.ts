@@ -145,6 +145,24 @@ export function repoKey(repoUrl: string): string {
   return `${m[1].toLowerCase()}/${m[2].replace(/\.git$/, "").toLowerCase()}`;
 }
 
+/** Normalize the owner portion of a GitHub URL to lowercase.
+ *  "https://github.com/Owner/repo" → "https://github.com/owner/repo"
+ *  Falls back to full lowercase on parse failure.
+ */
+export function normalizeRepoUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    const parts = u.pathname.split('/').filter(Boolean); // ['Owner', 'repo']
+    if (parts.length >= 2) {
+      parts[0] = parts[0].toLowerCase();
+      u.pathname = '/' + parts.join('/');
+    }
+    return u.toString();
+  } catch {
+    return url.toLowerCase();
+  }
+}
+
 /** Build a preamble prefix with prior repo learnings. */
 function buildLearningsPreamble(learnings: string[], rk: string): string {
   if (!learnings.length) return "";
