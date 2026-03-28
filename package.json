@@ -14,7 +14,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:docker": "vitest run --config vitest.integration.config.ts"
+    "test:docker": "vitest run --config vitest.integration.config.ts",
+    "test:integration": "node --experimental-strip-types --loader ./tests/integration/ts-loader.mjs --test tests/integration/docker.test.ts tests/integration/job-lifecycle.test.ts tests/integration/credentials.test.ts"
   },
   "files": [
     "dist/"
