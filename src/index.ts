@@ -23,7 +23,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { JobManager } from "./agent.js";
+import { JobManager, repoKey } from "./agent.js";
 import { buildEvaluatorTask } from "./evaluator.js";
 import { loadProfiles, upsertProfile, deleteProfile, getProfile, interpolate } from "./profiles.js";
 import { planStore, jobStore, learningsStore } from "./store.js";
@@ -462,13 +462,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "get_learnings",
-      description: "Return accumulated learnings for a namespace. Learnings are written by agents at the end of each job and stored per-namespace. Use this to understand what prior agents have discovered.",
+      description: "Return accumulated learnings for a repo or namespace. Learnings are written by agents at the end of each job. Use this to understand what prior agents have discovered.",
       inputSchema: {
         type: "object",
         properties: {
+          repo: {
+            type: "string",
+            description: "Repo key to query, e.g. 'gonzih/cc-agent'. Takes precedence over namespace when provided.",
+          },
           namespace: {
             type: "string",
-            description: "Namespace to query (defaults to current namespace)",
+            description: "Namespace to query (fallback when repo is not provided; defaults to current namespace)",
           },
           limit: {
             type: "number",
@@ -1121,9 +1125,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "get_learnings": {
-      const ns = (a.namespace as string | undefined) ?? getNamespace();
+      const repoParam = a.repo as string | undefined;
+      const ns = repoParam ?? (a.namespace as string | undefined) ?? getNamespace();
       const limit = typeof a.limit === "number" ? a.limit : 10;
-      logger.info("tool:get_learnings", { namespace: ns, limit });
+      logger.info("tool:get_learnings", { key: ns, limit });
       const learnings = await learningsStore.getLearnings(ns, limit);
       return {
         content: [{

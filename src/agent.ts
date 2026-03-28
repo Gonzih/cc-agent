@@ -122,13 +122,34 @@ function extractLearnings(output: string[]): string | null {
   return output.slice(idx).join("\n").trim();
 }
 
-/** Build a preamble prefix with prior namespace learnings. */
-function buildLearningsPreamble(learnings: string[]): string {
+/** Compress a raw learnings block to bullet points only, max 8 bullets. */
+function compressLearnings(raw: string): string {
+  return raw
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith("-") || l.startsWith("•"))
+    .map((l) => l.replace(/^[-•]\s*/, "").trim())
+    .filter((l) => l.length > 10 && l.length < 200)
+    .slice(0, 8)
+    .map((l) => `- ${l}`)
+    .join("\n");
+}
+
+/** Derive a repo-scoped key from a repo URL.
+ *  "https://github.com/Gonzih/cc-agent" → "gonzih/cc-agent"
+ *  "git@github.com:Gonzih/cc-agent.git" → "gonzih/cc-agent"
+ */
+export function repoKey(repoUrl: string): string {
+  const m = repoUrl.match(/github\.com[/:]([^/]+)\/([^/.]+)/i);
+  if (!m) return repoUrl.toLowerCase().replace(/[^a-z0-9]/g, "-");
+  return `${m[1].toLowerCase()}/${m[2].replace(/\.git$/, "").toLowerCase()}`;
+}
+
+/** Build a preamble prefix with prior repo learnings. */
+function buildLearningsPreamble(learnings: string[], rk: string): string {
   if (!learnings.length) return "";
-  const items = learnings
-    .map((l, i) => `### Learning ${i + 1} (most recent first)\n${l}`)
-    .join("\n\n");
-  return `## Prior Learnings in This Namespace (read before starting)\n${items}\n\n---\n\n`;
+  const items = learnings.join("\n");
+  return `Repo notes (${rk}):\n${items}\n\n---\n\n`;
 }
 
 /** Extract a quality score from job output lines. Exported for testing. */
@@ -382,11 +403,11 @@ export class JobManager {
   }
 
   async spawn(opts: SpawnOptions): Promise<string> {
-    // Prepend prior namespace learnings to the task
-    const namespace = getNamespace();
-    const priorLearnings = await learningsStore.getLearnings(namespace, 5);
+    // Prepend prior repo learnings to the task
+    const rk = repoKey(opts.repoUrl);
+    const priorLearnings = await learningsStore.getLearnings(rk, 5);
     let task = priorLearnings.length
-      ? buildLearningsPreamble(priorLearnings) + opts.task
+      ? buildLearningsPreamble(priorLearnings, rk) + opts.task
       : opts.task;
 
 
@@ -730,12 +751,15 @@ export class JobManager {
       this.addOutput(job, `[cc-agent] Done. Exit code: ${job.exitCode ?? 0}`);
       this.persistJob(job);
 
-      // Extract and store learnings for this namespace
+      // Extract and store learnings scoped to the repo
       const learnings = extractLearnings(job.output);
       if (learnings) {
-        const ns = getNamespace();
-        learningsStore.addLearning(ns, learnings).catch(() => {});
-        logger.info("job:learnings-extracted", { id: job.id, namespace: ns, length: learnings.length });
+        const rk = repoKey(job.repoUrl);
+        const compressed = compressLearnings(learnings);
+        if (compressed) {
+          learningsStore.addLearning(rk, compressed).catch(() => {});
+          logger.info("job:learnings-extracted", { id: job.id, repoKey: rk, length: compressed.length });
+        }
       }
 
       if (job.ollamaModel) {
