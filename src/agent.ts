@@ -1,12 +1,12 @@
 import { execFile } from "child_process";
 import { existsSync } from "fs";
-import { mkdtemp, rm, appendFile, mkdir } from "fs/promises";
+import { mkdtemp, rm, appendFile, mkdir, readFile } from "fs/promises";
 import { tmpdir, homedir } from "os";
 import { join } from "path";
 import { promisify } from "util";
 import { v4 as uuidv4 } from "uuid";
 import { runClaude } from "./claude.js";
-import { injectPreamble } from "./preamble.js";
+import { injectPreamble, BROWSER_HINT, CODE_QUALITY_CHECKLIST, isCodeTask } from "./preamble.js";
 import type { Job, JobSummary, SpawnOptions } from "./types.js";
 import { ensureStateDirs, isPidAlive } from "./state.js";
 import { jobStore, learningsStore, type JobRecord } from "./store.js";
@@ -432,6 +432,16 @@ export class JobManager {
     }
 
 
+    // Check if gstack browser daemon is available on the host
+    let hasBrowser = false;
+    try {
+      await execFileAsync("which", ["gstack"]);
+      hasBrowser = true;
+    } catch { /* not available */ }
+
+    if (hasBrowser) task += BROWSER_HINT;
+    if (isCodeTask(task)) task += CODE_QUALITY_CHECKLIST;
+
     const id = uuidv4();
     const pendingDeps = opts.dependsOn?.filter((depId) => {
       const dep = this.jobs.get(depId);
@@ -648,6 +658,20 @@ export class JobManager {
         }
       }
 
+      // 3b. Inject AGENTS.md or .cc-agent/notes.md as repo context if present
+      let repoContext = '';
+      const agentsMdPath = join(workDir!, 'AGENTS.md');
+      const ccAgentNotesPath = join(workDir!, '.cc-agent', 'notes.md');
+      if (existsSync(agentsMdPath)) {
+        const content = await readFile(agentsMdPath, 'utf-8');
+        repoContext = `\n\n## Repo Context (from AGENTS.md)\n${content.trim()}\n`;
+        logger.info("job:agents-md-injected", { id: job.id, bytes: content.length });
+      } else if (existsSync(ccAgentNotesPath)) {
+        const content = await readFile(ccAgentNotesPath, 'utf-8');
+        repoContext = `\n\n## Repo Context (from .cc-agent/notes.md)\n${content.trim()}\n`;
+        logger.info("job:cc-agent-notes-injected", { id: job.id, bytes: content.length });
+      }
+
       // 4. Run Claude
       job.status = "running";
       this.persistJob(job);
@@ -657,7 +681,7 @@ export class JobManager {
         : `[cc-agent] Starting Claude with task...`);
 
       await new Promise<void>((resolve, reject) => {
-        const proc = runClaude(injectPreamble(job.task, job.preamble), workDir!, token, {
+        const proc = runClaude(injectPreamble(job.task + repoContext, job.preamble), workDir!, token, {
           continueSession: isResume || job.continueSession,
           maxBudgetUsd: job.maxBudgetUsd,
           sessionId: job.sessionId,

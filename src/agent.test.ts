@@ -150,7 +150,7 @@ describe("JobManager", () => {
     const job = manager.getJob(id);
     expect(job).toBeDefined();
     expect(job!.id).toBe(id);
-    expect(job!.task).toBe("Write tests");
+    expect(job!.task).toContain("Write tests");
     expect(job!.repoUrl).toBe("https://github.com/test/repo.git");
   });
 
@@ -172,7 +172,7 @@ describe("JobManager", () => {
       task: "short task",
     });
     const list = manager.list();
-    expect(list[0].task).toBe("short task");
+    expect(list[0].task).toContain("short task");
   });
 
   it("getJob() returns undefined for unknown id", () => {
