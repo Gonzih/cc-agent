@@ -195,7 +195,7 @@ export function runDockerAgent(opts: {
         // Prepare workspace owned by agent
         "mkdir -p /workspace && chown agent:agent /workspace",
         // Write agent run script to avoid su -c quoting issues with task content
-        "printf '#!/bin/bash\\nset -e\\nexport HOME=/home/agent\\ngit clone --depth 1 \"$CC_DOCKER_REPO\" /workspace\\ncd /workspace\\nexec claude --dangerously-skip-permissions --print --output-format stream-json -p \"$CC_DOCKER_TASK\"\\n' > /home/agent/run.sh",
+        "printf '#!/bin/bash\\nset -e\\nexport HOME=/home/agent\\ngit clone --depth 1 \"$CC_DOCKER_REPO\" /workspace\\ncd /workspace\\nexec claude --dangerously-skip-permissions --verbose --print --output-format stream-json -p \"$CC_DOCKER_TASK\"\\n' > /home/agent/run.sh",
         "chmod +x /home/agent/run.sh && chown agent:agent /home/agent/run.sh",
         // Run as non-root agent user, preserving env vars (ANTHROPIC_API_KEY, GITHUB_TOKEN, etc.)
         opts.smokeTest ? "echo \"integration-test-ok\"" : "exec su -p agent /home/agent/run.sh",
