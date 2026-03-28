@@ -109,6 +109,9 @@ export function runDockerAgent(opts: {
   anthropicToken?: string;
   githubToken?: string;
   namespace?: string;
+  /** When true, skips the claude invocation and instead echoes "integration-test-ok".
+   *  Used by integration tests to verify container setup without requiring a real API token. */
+  smokeTest?: boolean;
 }): DockerAgentProcess {
   const emitter = new EventEmitter() as DockerAgentProcess;
   emitter.pid = undefined;
@@ -195,7 +198,7 @@ export function runDockerAgent(opts: {
         "printf '#!/bin/bash\\nset -e\\nexport HOME=/home/agent\\ngit clone --depth 1 \"$CC_DOCKER_REPO\" /workspace\\ncd /workspace\\nexec claude --dangerously-skip-permissions --print --output-format stream-json -p \"$CC_DOCKER_TASK\"\\n' > /home/agent/run.sh",
         "chmod +x /home/agent/run.sh && chown agent:agent /home/agent/run.sh",
         // Run as non-root agent user, preserving env vars (ANTHROPIC_API_KEY, GITHUB_TOKEN, etc.)
-        "exec su -p agent /home/agent/run.sh",
+        opts.smokeTest ? "echo \"integration-test-ok\"" : "exec su -p agent /home/agent/run.sh",
       ].join(" && ");
 
       if (killed) return;

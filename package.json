@@ -13,7 +13,8 @@
     "prepublishOnly": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "test:docker": "vitest run --config vitest.integration.config.ts"
   },
   "files": [
     "dist/"
