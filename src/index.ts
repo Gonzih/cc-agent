@@ -30,6 +30,8 @@ import { planStore, jobStore, learningsStore } from "./store.js";
 import { getNamespace } from "./namespace.js";
 import { initRedis, getRedis } from "./redis.js";
 import { logger } from "./logger.js";
+import { Coordinator } from "./coordinator.js";
+import { CronEngine } from "./cron.js";
 import { listCcAgentContainers } from "./docker.js";
 import { loadTokens, getTokenStatus } from "./tokens.js";
 import { v4 as uuidv4 } from "uuid";
@@ -68,6 +70,9 @@ function extractGithubOwner(repoUrl: string): string | null {
 }
 
 const manager = new JobManager(token);
+const namespace = getNamespace();
+const coordinator = new Coordinator(manager, namespace);
+const cronEngine = new CronEngine(manager, namespace);
 
 const server = new Server(
   { name: "cc-agent", version: PKG_VERSION },
@@ -551,6 +556,56 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
         required: ["profile_name"],
       },
+    },
+    {
+      name: "list_crons",
+      description: "List all scheduled cron jobs for the current namespace.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "create_cron",
+      description: "Create a new cron job that fires on a recurring interval and spawns an agent.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          interval_ms: { type: "number", description: "Interval in milliseconds between fires" },
+          prompt: { type: "string", description: "Task prompt to pass to the agent on each fire" },
+          schedule: { type: "string", description: "Human-readable schedule label, e.g. 'every 30m'" },
+          chat_id: { type: "number", description: "Telegram chat ID for notification routing (optional, default 0)" },
+          repo_url: { type: "string", description: "Repository URL to run the cron task on (optional)" },
+        },
+        required: ["interval_ms", "prompt", "schedule"],
+      },
+    },
+    {
+      name: "delete_cron",
+      description: "Delete a cron job by ID.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          cron_id: { type: "string", description: "Cron job ID to delete" },
+        },
+        required: ["cron_id"],
+      },
+    },
+    {
+      name: "update_cron",
+      description: "Update fields on an existing cron job.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          cron_id: { type: "string", description: "Cron job ID to update" },
+          interval_ms: { type: "number", description: "New interval in milliseconds (optional)" },
+          prompt: { type: "string", description: "New prompt (optional)" },
+          schedule: { type: "string", description: "New schedule label (optional)" },
+        },
+        required: ["cron_id"],
+      },
+    },
+    {
+      name: "list_notifications",
+      description: "Return the last 20 notification messages sent by the coordinator for the current namespace.",
+      inputSchema: { type: "object", properties: {} },
     },
   ],
 }));
@@ -1216,6 +1271,51 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       };
     }
 
+    case "list_crons": {
+      logger.info("tool:list_crons");
+      const crons = await cronEngine.listCrons();
+      return { content: [{ type: "text", text: JSON.stringify({ crons, total: crons.length }) }] };
+    }
+
+    case "create_cron": {
+      logger.info("tool:create_cron", { schedule: a.schedule });
+      const cron = await cronEngine.addCron({
+        chatId: typeof a.chat_id === "number" ? a.chat_id : 0,
+        intervalMs: a.interval_ms as number,
+        prompt: a.prompt as string,
+        schedule: a.schedule as string,
+        repoUrl: a.repo_url as string | undefined,
+      });
+      return { content: [{ type: "text", text: JSON.stringify(cron) }] };
+    }
+
+    case "delete_cron": {
+      logger.info("tool:delete_cron", { cron_id: a.cron_id });
+      const deleted = await cronEngine.deleteCron(a.cron_id as string);
+      return { content: [{ type: "text", text: JSON.stringify({ deleted, cron_id: a.cron_id }) }] };
+    }
+
+    case "update_cron": {
+      logger.info("tool:update_cron", { cron_id: a.cron_id });
+      const updates: Record<string, unknown> = {};
+      if (typeof a.interval_ms === "number") updates.intervalMs = a.interval_ms;
+      if (typeof a.prompt === "string") updates.prompt = a.prompt;
+      if (typeof a.schedule === "string") updates.schedule = a.schedule;
+      const updated = await cronEngine.updateCron(a.cron_id as string, updates as Parameters<typeof cronEngine.updateCron>[1]);
+      return { content: [{ type: "text", text: JSON.stringify(updated ?? { error: "cron not found" }) }] };
+    }
+
+    case "list_notifications": {
+      logger.info("tool:list_notifications");
+      const ns = getNamespace();
+      const redis = getRedis();
+      let messages: string[] = [];
+      if (redis) {
+        messages = await redis.lrange(`cca:notify-log:${ns}`, 0, 19);
+      }
+      return { content: [{ type: "text", text: JSON.stringify({ messages, total: messages.length, namespace: ns }) }] };
+    }
+
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
@@ -1229,9 +1329,11 @@ process.on('unhandledRejection', (reason) => {
   logger.error('[cc-agent] unhandledRejection — process will NOT exit', { reason: String(reason) });
 });
 
-// Bootstrap: provision Redis, restore jobs, then start MCP transport
+// Bootstrap: provision Redis, restore jobs, then start background engines
 await initRedis();
 await manager.init();
+await coordinator.start();
+await cronEngine.start();
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
