@@ -2,6 +2,14 @@ import type { Writable } from "stream";
 
 export type JobStatus = "pending" | "cloning" | "running" | "done" | "failed" | "cancelled" | "sleeping" | "pending_approval" | "rejected" | "interrupted";
 
+export interface CoordinatorPlan {
+  next_step?: {
+    repo_url: string;
+    task: string;
+  };
+  summary?: string;
+}
+
 export interface JobEvent {
   jobId: string;
   status: string;
@@ -10,6 +18,7 @@ export interface JobEvent {
   lastLines: string[];   // last 5 lines from job output
   score?: number;
   timestamp: number;
+  coordinatorPlan?: CoordinatorPlan;
 }
 
 export interface OnComplete {
