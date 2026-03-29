@@ -24,6 +24,7 @@ export interface CronJob {
   createdAt: string;
   lastFiredAt?: string;
   repoUrl?: string;  // optional — which repo to run on
+  enabled?: boolean; // default true; set false to pause without deleting
 }
 
 const TICK_INTERVAL_MS = 60_000; // 1 minute
@@ -73,6 +74,7 @@ export class CronEngine {
     const crons = await this.listCrons();
     const now = Date.now();
     for (const cron of crons) {
+      if (cron.enabled === false) continue;
       const lastFired = cron.lastFiredAt ? new Date(cron.lastFiredAt).getTime() : 0;
       if (now - lastFired >= cron.intervalMs) {
         await this.fire(cron);
@@ -92,10 +94,22 @@ export class CronEngine {
         schedule: cron.schedule,
         jobId,
       });
-      await this.updateCron(cron.id, { lastFiredAt: new Date().toISOString() });
+      await this.updateLastFired(cron.id);
     } catch (err) {
       logger.warn("cron:fire-failed", { id: cron.id, err: String(err) });
     }
+  }
+
+  /** Atomically reload from Redis and update lastFiredAt — skips if cron was deleted. */
+  private async updateLastFired(id: string): Promise<void> {
+    const redis = getRedis();
+    if (!redis) return;
+    const raw = await redis.get(this.redisKey());
+    const crons: CronJob[] = raw ? JSON.parse(raw) : [];
+    const idx = crons.findIndex((c) => c.id === id);
+    if (idx === -1) return; // was deleted — don't re-add
+    crons[idx].lastFiredAt = new Date().toISOString();
+    await redis.set(this.redisKey(), JSON.stringify(crons));
   }
 
   // ---------------------------------------------------------------------------
