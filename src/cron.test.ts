@@ -248,6 +248,57 @@ describe("CronEngine — tick / firing", () => {
     );
   });
 
+  it("does NOT fire cron with enabled: false", async () => {
+    const cron: CronJob = {
+      id: "c-disabled",
+      chatId: 0,
+      intervalMs: 50,
+      prompt: "should not run",
+      schedule: "every 50ms",
+      createdAt: new Date().toISOString(),
+      enabled: false,
+      // no lastFiredAt → would fire if enabled
+    };
+
+    mockRedisGet.mockResolvedValue(JSON.stringify([cron]));
+
+    await engine.tick();
+
+    expect(manager.spawn).not.toHaveBeenCalled();
+  });
+
+  it("deleted cron is not resurrected by updateLastFired", async () => {
+    const cron: CronJob = {
+      id: "c-deleted",
+      chatId: 0,
+      intervalMs: 50,
+      prompt: "delete me mid-tick",
+      schedule: "fast",
+      createdAt: new Date().toISOString(),
+    };
+
+    // First read (tick's listCrons) returns the cron
+    // Second read (updateLastFired's reload) returns empty — simulates concurrent delete
+    let callCount = 0;
+    mockRedisGet.mockImplementation(async () => {
+      callCount++;
+      if (callCount === 1) return JSON.stringify([cron]);
+      return JSON.stringify([]); // deleted between tick and updateLastFired
+    });
+    let savedValue: string | null = null;
+    mockRedisSet.mockImplementation(async (_key: string, value: string) => {
+      savedValue = value;
+      return "OK";
+    });
+
+    await engine.tick();
+
+    // spawn was still called (fire happened before the delete check)
+    expect(manager.spawn).toHaveBeenCalled();
+    // but Redis was NOT written back with the deleted cron
+    expect(savedValue).toBeNull();
+  });
+
   it("updates lastFiredAt after firing", async () => {
     const cron: CronJob = {
       id: "c4",

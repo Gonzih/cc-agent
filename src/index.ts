@@ -573,6 +573,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           schedule: { type: "string", description: "Human-readable schedule label, e.g. 'every 30m'" },
           chat_id: { type: "number", description: "Telegram chat ID for notification routing (optional, default 0)" },
           repo_url: { type: "string", description: "Repository URL to run the cron task on (optional)" },
+          enabled: { type: "boolean", description: "Whether the cron is active (optional, default true)" },
         },
         required: ["interval_ms", "prompt", "schedule"],
       },
@@ -598,6 +599,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           interval_ms: { type: "number", description: "New interval in milliseconds (optional)" },
           prompt: { type: "string", description: "New prompt (optional)" },
           schedule: { type: "string", description: "New schedule label (optional)" },
+          enabled: { type: "boolean", description: "Enable or disable the cron (optional)" },
         },
         required: ["cron_id"],
       },
@@ -1285,6 +1287,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         prompt: a.prompt as string,
         schedule: a.schedule as string,
         repoUrl: a.repo_url as string | undefined,
+        enabled: typeof a.enabled === "boolean" ? a.enabled : true,
       });
       return { content: [{ type: "text", text: JSON.stringify(cron) }] };
     }
@@ -1301,6 +1304,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       if (typeof a.interval_ms === "number") updates.intervalMs = a.interval_ms;
       if (typeof a.prompt === "string") updates.prompt = a.prompt;
       if (typeof a.schedule === "string") updates.schedule = a.schedule;
+      if (typeof a.enabled === "boolean") updates.enabled = a.enabled;
       const updated = await cronEngine.updateCron(a.cron_id as string, updates as Parameters<typeof cronEngine.updateCron>[1]);
       return { content: [{ type: "text", text: JSON.stringify(updated ?? { error: "cron not found" }) }] };
     }
