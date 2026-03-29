@@ -1,16 +1,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { injectPreamble, DEFAULT_PREAMBLE } from "./preamble.js";
 
-const { mockIsPidAlive, mockJobStoreLoadAll, mockGetRedis, mockRedisPublish, mockRedisLrange } = vi.hoisted(() => {
+const { mockIsPidAlive, mockJobStoreLoadAll, mockGetRedis, mockRedisPublish, mockRedisLrange, mockRedisGet } = vi.hoisted(() => {
   const mockRedisPublish = vi.fn(async () => 0);
   const mockRedisLrange = vi.fn(async () => [] as string[]);
-  const mockRedisFull = { publish: mockRedisPublish, lrange: mockRedisLrange };
+  const mockRedisGet = vi.fn(async () => null as string | null);
+  const mockRedisFull = { publish: mockRedisPublish, lrange: mockRedisLrange, get: mockRedisGet };
   return {
     mockIsPidAlive: vi.fn(() => false),
     mockJobStoreLoadAll: vi.fn(async () => [] as any[]),
     mockGetRedis: vi.fn(() => null as typeof mockRedisFull | null),
     mockRedisPublish,
     mockRedisLrange,
+    mockRedisGet,
   };
 });
 
@@ -539,8 +541,9 @@ describe("Redis pub/sub job events", () => {
     mockJobStoreLoadAll.mockResolvedValue([]);
     mockRedisPublish.mockResolvedValue(0);
     mockRedisLrange.mockResolvedValue(["line1", "line2"]);
+    mockRedisGet.mockResolvedValue(null);
     // Enable Redis for these tests
-    mockGetRedis.mockReturnValue({ publish: mockRedisPublish, lrange: mockRedisLrange } as any);
+    mockGetRedis.mockReturnValue({ publish: mockRedisPublish, lrange: mockRedisLrange, get: mockRedisGet } as any);
   });
 
   afterEach(() => {
@@ -595,6 +598,45 @@ describe("Redis pub/sub job events", () => {
     expect(doneCall).toBeDefined();
     const event = JSON.parse(doneCall![1] as string);
     expect(event.title).toBe("My job title");
+  });
+
+  it("includes coordinatorPlan in event when Redis key is set", async () => {
+    const plan = { next_step: { repo_url: "https://github.com/test/next.git", task: "Next task" }, summary: "Part of a plan" };
+    mockRedisGet.mockResolvedValue(JSON.stringify(plan));
+    const manager = new JobManager();
+    const id = await manager.spawn({
+      repoUrl: "https://github.com/test/repo.git",
+      task: "Coordinator plan test",
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    const doneCall = mockRedisPublish.mock.calls.find((c) => {
+      try {
+        const evt = JSON.parse(c[1] as string);
+        return evt.status === "done" && evt.jobId === id;
+      } catch { return false; }
+    });
+    expect(doneCall).toBeDefined();
+    const event = JSON.parse(doneCall![1] as string);
+    expect(event.coordinatorPlan).toEqual(plan);
+  });
+
+  it("omits coordinatorPlan from event when Redis key is absent", async () => {
+    mockRedisGet.mockResolvedValue(null);
+    const manager = new JobManager();
+    const id = await manager.spawn({
+      repoUrl: "https://github.com/test/repo.git",
+      task: "No coordinator plan test",
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    const doneCall = mockRedisPublish.mock.calls.find((c) => {
+      try {
+        const evt = JSON.parse(c[1] as string);
+        return evt.status === "done" && evt.jobId === id;
+      } catch { return false; }
+    });
+    expect(doneCall).toBeDefined();
+    const event = JSON.parse(doneCall![1] as string);
+    expect(event.coordinatorPlan).toBeUndefined();
   });
 
   it("does not crash if Redis is unavailable (getRedis returns null)", async () => {

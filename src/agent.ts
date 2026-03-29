@@ -7,7 +7,7 @@ import { promisify } from "util";
 import { v4 as uuidv4 } from "uuid";
 import { runClaude } from "./claude.js";
 import { injectPreamble, BROWSER_HINT, CODE_QUALITY_CHECKLIST, isCodeTask } from "./preamble.js";
-import type { Job, JobSummary, SpawnOptions, JobEvent } from "./types.js";
+import type { Job, JobSummary, SpawnOptions, JobEvent, CoordinatorPlan } from "./types.js";
 import { ensureStateDirs, isPidAlive } from "./state.js";
 import { jobStore, learningsStore, type JobRecord } from "./store.js";
 import { getNamespace } from "./namespace.js";
@@ -450,7 +450,10 @@ export class JobManager {
     if (!redis) return;
     (async () => {
       try {
-        const lastLines = await redis.lrange(`cca:job:${job.id}:output`, -5, -1);
+        const [lastLines, planRaw] = await Promise.all([
+          redis.lrange(`cca:job:${job.id}:output`, -5, -1),
+          redis.get(`cca:coordinator:plan:${job.id}`),
+        ]);
         const event: JobEvent = {
           jobId: job.id,
           status: job.status,
@@ -459,6 +462,7 @@ export class JobManager {
           lastLines,
           score: job.score ?? undefined,
           timestamp: Date.now(),
+          coordinatorPlan: planRaw ? (JSON.parse(planRaw) as CoordinatorPlan) : undefined,
         };
         await redis.publish('cca:events', JSON.stringify(event));
       } catch (err) {

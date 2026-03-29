@@ -28,7 +28,7 @@ import { buildEvaluatorTask } from "./evaluator.js";
 import { loadProfiles, upsertProfile, deleteProfile, getProfile, interpolate } from "./profiles.js";
 import { planStore, jobStore, learningsStore } from "./store.js";
 import { getNamespace } from "./namespace.js";
-import { initRedis } from "./redis.js";
+import { initRedis, getRedis } from "./redis.js";
 import { logger } from "./logger.js";
 import { listCcAgentContainers } from "./docker.js";
 import { loadTokens, getTokenStatus } from "./tokens.js";
@@ -154,6 +154,23 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "number",
             description:
               "Timeout for the smoke test in seconds (default 60). Only used when smoke_test is set.",
+          },
+          coordinator_plan: {
+            type: "object",
+            description: "Optional plan for cc-tg coordinator. If set, cc-tg will spawn the nextStep when this job completes.",
+            properties: {
+              next_step: {
+                type: "object",
+                properties: {
+                  repo_url: { type: "string" },
+                  task: { type: "string" },
+                },
+              },
+              summary: {
+                type: "string",
+                description: "Human-readable description of what this job is part of",
+              },
+            },
           },
         },
         required: ["repo_url", "task"],
@@ -568,6 +585,22 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         smokeTestTimeout: a.smoke_test_timeout as number | undefined,
         requiresApproval: !isTrusted,
       });
+
+      if (a.coordinator_plan) {
+        const redis = getRedis();
+        if (redis) {
+          try {
+            await redis.set(
+              `cca:coordinator:plan:${jobId}`,
+              JSON.stringify(a.coordinator_plan),
+              'EX',
+              7 * 24 * 3600,
+            );
+          } catch (err) {
+            logger.warn("coordinator-plan:store-failed", { jobId, err: String(err) });
+          }
+        }
+      }
 
       if (!isTrusted && owner) {
         // Create a GitHub issue on the repo requesting approval
