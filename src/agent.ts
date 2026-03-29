@@ -352,13 +352,26 @@ export class JobManager {
       } else if (status === "running" || status === "cloning") {
         const isAlive = r.pid ? isPidAlive(r.pid) : false;
         if (!isAlive) {
-          status = "interrupted";
-          error = (error ? error + "; " : "") + "Process not found after restart";
-          finishedAt = finishedAt ?? new Date().toISOString();
-          interruptedAt = interruptedAt ?? new Date().toISOString();
-          orphanCount++;
+          // Check last output line — if Claude finished cleanly the output will say so.
+          // This catches the race where cc-agent died right as a job completed.
+          let looksCompleted = false;
+          try {
+            const lastOutput = await jobStore.getOutput(r.id, Math.max(0, r.outputLineCount - 3));
+            const lastLine = lastOutput[lastOutput.length - 1] ?? "";
+            looksCompleted = /Done\. Exit code:\s*0/i.test(lastLine);
+          } catch { /* ignore */ }
+          if (looksCompleted) {
+            status = "done";
+            finishedAt = finishedAt ?? new Date().toISOString();
+          } else {
+            status = "interrupted";
+            error = (error ? error + "; " : "") + "Process not found after restart";
+            finishedAt = finishedAt ?? new Date().toISOString();
+            interruptedAt = interruptedAt ?? new Date().toISOString();
+            orphanCount++;
+          }
         }
-        // else: process is alive — keep as running
+        // else: process is alive — keep as running (owned by sibling cc-agent instance)
       }
       // sleeping jobs survive restarts — wake timer is rescheduled below
 
@@ -399,13 +412,30 @@ export class JobManager {
       if (job.status === "pending_approval") continue; // managed by approval poller
       if (job.status === "running" || job.status === "cloning") {
         if (!job.pid || !isPidAlive(job.pid)) {
-          job.status = "interrupted";
-          job.finishedAt = new Date();
-          job.interruptedAt = job.interruptedAt ?? new Date();
-          job.error = (job.error ? job.error + "; " : "") + "Process exited after MCP restart";
-          logger.warn("job:process-died", { id, pid: job.pid });
-          this.persistJob(job);
-          this.addOutput(job, "[cc-agent] Process no longer alive after MCP restart");
+          // Before marking interrupted, check Redis — another cc-agent instance may have
+          // already completed this job. With multiple cc-agent processes running (one per
+          // Claude Code session), restored jobs may be owned by a sibling instance.
+          (async () => {
+            try {
+              const current = await jobStore.getJob(id);
+              if (current && current.status !== "running" && current.status !== "cloning") {
+                // Sibling instance already resolved this job — sync local state and stop tracking
+                const resolved = fromRecord(current);
+                this.jobs.set(id, resolved);
+                this.restoredJobs.delete(id);
+                logger.info("job:synced-from-redis", { id, status: current.status });
+                return;
+              }
+            } catch { /* ignore — fall through to interrupt */ }
+            // PID dead and Redis still shows running — genuinely orphaned
+            job.status = "interrupted";
+            job.finishedAt = new Date();
+            job.interruptedAt = job.interruptedAt ?? new Date();
+            job.error = (job.error ? job.error + "; " : "") + "Process exited after MCP restart";
+            logger.warn("job:process-died", { id, pid: job.pid });
+            this.persistJob(job);
+            this.addOutput(job, "[cc-agent] Process no longer alive after MCP restart");
+          })().catch(() => {});
         }
       }
     }
