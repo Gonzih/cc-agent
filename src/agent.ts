@@ -1107,8 +1107,13 @@ export class JobManager {
   async getOutput(id: string, offset = 0): Promise<{ lines: string[]; done: boolean; toolCalls: string[] }> {
     const job = this.jobs.get(id);
     if (!job) {
+      // Job not in this instance's memory — may be owned by a sibling cc-agent process.
+      // Check Redis for the real status before assuming it's done.
+      const record = await jobStore.getJob(id);
       const lines = await jobStore.getOutput(id, offset);
-      return { lines, done: true, toolCalls: [] };
+      const TERMINAL = ["done", "failed", "cancelled", "rejected", "interrupted"];
+      const done = !record || TERMINAL.includes(record.status);
+      return { lines, done, toolCalls: [] };
     }
     const done = job.status === "done" || job.status === "failed" || job.status === "cancelled" || job.status === "rejected";
     if (this.restoredJobs.has(id)) {
