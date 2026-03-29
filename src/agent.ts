@@ -465,6 +465,23 @@ export class JobManager {
           coordinatorPlan: planRaw ? (JSON.parse(planRaw) as CoordinatorPlan) : undefined,
         };
         await redis.publish('cca:events', JSON.stringify(event));
+        // Also write to Redis Stream for durability (fire-and-forget, never crash on failure)
+        try {
+          await redis.xadd(
+            'cca:event-stream', '*',
+            'jobId', event.jobId,
+            'status', event.status,
+            'title', event.title,
+            'repoUrl', event.repoUrl,
+            'lastLines', JSON.stringify(event.lastLines),
+            'coordinatorPlan', JSON.stringify(event.coordinatorPlan ?? null),
+            'score', event.score !== undefined ? String(event.score) : '',
+            'timestamp', String(event.timestamp),
+          );
+          await redis.xtrim('cca:event-stream', 'MAXLEN', '~', '500');
+        } catch (streamErr) {
+          logger.warn('job:stream-write-failed', { id: job.id, err: String(streamErr) });
+        }
       } catch (err) {
         logger.warn('job:event-publish-failed', { id: job.id, err: String(err) });
       }
