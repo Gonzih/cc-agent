@@ -27,6 +27,9 @@ async function tryConnect(attempts = 10, delayMs = 500): Promise<Redis | null> {
         maxRetriesPerRequest: 1,
         enableOfflineQueue: false,
       });
+      client.on('error', (err: Error) => {
+        logger.warn('redis:client-error (non-fatal)', { err: err.message });
+      });
       await client.connect();
       await client.ping();
       return client;

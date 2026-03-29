@@ -1188,6 +1188,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   }
 });
 
+// Top-level crash guards — log but never kill the process
+process.on('uncaughtException', (err) => {
+  logger.error('[cc-agent] uncaughtException — process will NOT exit', { err: String(err) });
+});
+process.on('unhandledRejection', (reason) => {
+  logger.error('[cc-agent] unhandledRejection — process will NOT exit', { reason: String(reason) });
+});
+
 // Bootstrap: provision Redis, restore jobs, then start MCP transport
 await initRedis();
 await manager.init();
