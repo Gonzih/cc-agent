@@ -212,6 +212,34 @@ describe("Coordinator", () => {
     );
   });
 
+  // Done event always notifies with ✓ format
+  it("notifies ✓ done for a standard done event", async () => {
+    const event = makeEvent({ status: "done", title: "My Task", repoUrl: "https://github.com/test/repo" });
+    await coordinator.processEvent(event);
+
+    expect(mockRedisPublish).toHaveBeenCalledWith(
+      "cca:notify:test-ns",
+      "✓ My Task done\nhttps://github.com/test/repo",
+    );
+  });
+
+  // Done event with coordinatorPlan still notifies ✓ done (and spawns next)
+  it("notifies ✓ done even when coordinatorPlan fires", async () => {
+    const event = makeEvent({
+      status: "done",
+      title: "Parent Task",
+      repoUrl: "https://github.com/test/repo",
+      coordinatorPlan: { next_step: { repo_url: "https://github.com/test/next", task: "next" } },
+    });
+    await coordinator.processEvent(event);
+
+    expect(manager.spawn).toHaveBeenCalled();
+    expect(mockRedisPublish).toHaveBeenCalledWith(
+      "cca:notify:test-ns",
+      "✓ Parent Task done\nhttps://github.com/test/repo",
+    );
+  });
+
   // Low score triggers notification
   it("publishes low-score notification when score < 0.5 on done event", async () => {
     const event = makeEvent({ status: "done", score: 0.3, title: "Low scorer" });
@@ -223,11 +251,14 @@ describe("Coordinator", () => {
     );
   });
 
-  // High score does NOT trigger notification
-  it("does not publish notification for high-score done event", async () => {
-    const event = makeEvent({ status: "done", score: 0.8 });
+  // All done jobs now notify
+  it("publishes done notification for high-score done event", async () => {
+    const event = makeEvent({ status: "done", score: 0.8, title: "Great Job", repoUrl: "https://github.com/test/repo" });
     await coordinator.processEvent(event);
 
-    expect(mockRedisPublish).not.toHaveBeenCalled();
+    expect(mockRedisPublish).toHaveBeenCalledWith(
+      "cca:notify:test-ns",
+      "✓ Great Job done\nhttps://github.com/test/repo",
+    );
   });
 });

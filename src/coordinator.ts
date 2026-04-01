@@ -108,13 +108,15 @@ export class Coordinator {
     const { jobId, status, title, repoUrl, score, coordinatorPlan } = event;
 
     if (status === "done") {
-      // 1. Coordinator plan from Redis (set by spawn_agent via coordinator_plan param)
+      // 1. Coordinator plan — spawn follow-up job if configured
       if (coordinatorPlan?.next_step) {
         await this.spawnNext(jobId, title, repoUrl, coordinatorPlan);
-        return;
       }
 
-      // 2. Low-score notification
+      // 2. Notify done (always, for all completed jobs)
+      await notify(this.namespace, `✓ ${title} done\n${repoUrl}`);
+
+      // 3. Additional low-score warning
       if (typeof score === "number" && score < LOW_SCORE_THRESHOLD) {
         await notify(
           this.namespace,
@@ -148,10 +150,6 @@ export class Coordinator {
         childId,
         nextRepo: next.repo_url,
       });
-      await notify(
-        this.namespace,
-        `✓ ${parentTitle} done → spawned: ${next.repo_url}`,
-      );
     } catch (err) {
       logger.warn("coordinator:spawn-next-failed", {
         parentJobId,

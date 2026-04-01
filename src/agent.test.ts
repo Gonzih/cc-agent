@@ -1,11 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { injectPreamble, DEFAULT_PREAMBLE } from "./preamble.js";
 
-const { mockIsPidAlive, mockJobStoreLoadAll, mockGetRedis, mockRedisPublish, mockRedisLrange, mockRedisGet } = vi.hoisted(() => {
+const { mockIsPidAlive, mockJobStoreLoadAll, mockGetRedis, mockRedisPublish, mockRedisLrange, mockRedisGet, mockRedisXadd, mockRedisXtrim, mockRedisLpop, mockRedisDel } = vi.hoisted(() => {
   const mockRedisPublish = vi.fn(async () => 0);
   const mockRedisLrange = vi.fn(async () => [] as string[]);
   const mockRedisGet = vi.fn(async () => null as string | null);
-  const mockRedisFull = { publish: mockRedisPublish, lrange: mockRedisLrange, get: mockRedisGet };
+  const mockRedisXadd = vi.fn(async () => "1-1");
+  const mockRedisXtrim = vi.fn(async () => 0);
+  const mockRedisLpop = vi.fn(async () => null as string | null);
+  const mockRedisDel = vi.fn(async () => 1);
+  const mockRedisFull = { publish: mockRedisPublish, lrange: mockRedisLrange, get: mockRedisGet, xadd: mockRedisXadd, xtrim: mockRedisXtrim, lpop: mockRedisLpop, del: mockRedisDel };
   return {
     mockIsPidAlive: vi.fn(() => false),
     mockJobStoreLoadAll: vi.fn(async () => [] as any[]),
@@ -13,6 +17,10 @@ const { mockIsPidAlive, mockJobStoreLoadAll, mockGetRedis, mockRedisPublish, moc
     mockRedisPublish,
     mockRedisLrange,
     mockRedisGet,
+    mockRedisXadd,
+    mockRedisXtrim,
+    mockRedisLpop,
+    mockRedisDel,
   };
 });
 
@@ -534,27 +542,47 @@ describe("DOCKER_PREAMBLE", () => {
   });
 });
 
-describe("Redis pub/sub job events", () => {
+// Helper: parse flat xadd field array into an object
+function parseXaddFields(args: unknown[]): Record<string, string> {
+  // args = ['cca:event-stream', '*', 'field1', 'val1', 'field2', 'val2', ...]
+  const obj: Record<string, string> = {};
+  for (let i = 2; i < args.length - 1; i += 2) {
+    obj[args[i] as string] = args[i + 1] as string;
+  }
+  return obj;
+}
+
+describe("Redis stream job events", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mockIsPidAlive.mockReturnValue(false);
     mockJobStoreLoadAll.mockResolvedValue([]);
-    mockRedisPublish.mockResolvedValue(0);
     mockRedisLrange.mockResolvedValue(["line1", "line2"]);
     mockRedisGet.mockResolvedValue(null);
+    mockRedisXadd.mockResolvedValue("1-1");
+    mockRedisXtrim.mockResolvedValue(0);
+    mockRedisLpop.mockResolvedValue(null);
     // Enable Redis for these tests
-    mockGetRedis.mockReturnValue({ publish: mockRedisPublish, lrange: mockRedisLrange, get: mockRedisGet } as any);
+    mockGetRedis.mockReturnValue({
+      publish: mockRedisPublish,
+      lrange: mockRedisLrange,
+      get: mockRedisGet,
+      xadd: mockRedisXadd,
+      xtrim: mockRedisXtrim,
+      lpop: mockRedisLpop,
+      del: mockRedisDel,
+    } as any);
   });
 
   afterEach(() => {
     mockGetRedis.mockReturnValue(null);
   });
 
-  it("publishes a JobEvent to cca:events when job transitions to done", async () => {
+  it("writes a JobEvent to cca:event-stream when job transitions to done", async () => {
     const manager = new JobManager();
     const id = await manager.spawn({
       repoUrl: "https://github.com/test/repo.git",
-      task: "Test pub/sub",
+      task: "Test stream write",
     });
 
     // Wait for the async run to settle (claude mock emits exit after 50ms)
@@ -563,27 +591,21 @@ describe("Redis pub/sub job events", () => {
     const job = manager.getJob(id);
     expect(job?.status).toBe("done");
 
-    // At least one publish call should have happened
-    expect(mockRedisPublish).toHaveBeenCalled();
-    // Find the 'done' event publish for THIS job specifically
-    const calls = mockRedisPublish.mock.calls;
-    const doneCall = calls.find((c) => {
-      try {
-        const evt = JSON.parse(c[1] as string);
-        return evt.status === "done" && evt.jobId === id;
-      } catch { return false; }
+    // Find the xadd call for this job's 'done' event
+    const doneCall = mockRedisXadd.mock.calls.find((args) => {
+      const fields = parseXaddFields(args);
+      return fields.status === "done" && fields.jobId === id;
     });
     expect(doneCall).toBeDefined();
-    const event = JSON.parse(doneCall![1] as string);
-    expect(event.jobId).toBe(id);
-    expect(event.status).toBe("done");
-    expect(event.repoUrl).toBe("https://github.com/test/repo.git");
-    expect(typeof event.timestamp).toBe("number");
-    expect(Array.isArray(event.lastLines)).toBe(true);
-    expect(doneCall![0]).toBe("cca:events");
+    const fields = parseXaddFields(doneCall!);
+    expect(fields.jobId).toBe(id);
+    expect(fields.status).toBe("done");
+    expect(fields.repoUrl).toBe("https://github.com/test/repo.git");
+    expect(typeof parseInt(fields.timestamp)).toBe("number");
+    expect(doneCall![0]).toBe("cca:event-stream");
   });
 
-  it("publishes event with correct title (first line of task)", async () => {
+  it("writes event with correct title (first line of task)", async () => {
     const manager = new JobManager();
     await manager.spawn({
       repoUrl: "https://github.com/test/repo.git",
@@ -592,12 +614,12 @@ describe("Redis pub/sub job events", () => {
 
     await new Promise((r) => setTimeout(r, 200));
 
-    const doneCall = mockRedisPublish.mock.calls.find((c) => {
-      try { return JSON.parse(c[1] as string).status === "done"; } catch { return false; }
+    const doneCall = mockRedisXadd.mock.calls.find((args) => {
+      const f = parseXaddFields(args);
+      return f.status === "done";
     });
     expect(doneCall).toBeDefined();
-    const event = JSON.parse(doneCall![1] as string);
-    expect(event.title).toBe("My job title");
+    expect(parseXaddFields(doneCall!).title).toBe("My job title");
   });
 
   it("includes coordinatorPlan in event when Redis key is set", async () => {
@@ -609,15 +631,12 @@ describe("Redis pub/sub job events", () => {
       task: "Coordinator plan test",
     });
     await new Promise((r) => setTimeout(r, 200));
-    const doneCall = mockRedisPublish.mock.calls.find((c) => {
-      try {
-        const evt = JSON.parse(c[1] as string);
-        return evt.status === "done" && evt.jobId === id;
-      } catch { return false; }
+    const doneCall = mockRedisXadd.mock.calls.find((args) => {
+      const f = parseXaddFields(args);
+      return f.status === "done" && f.jobId === id;
     });
     expect(doneCall).toBeDefined();
-    const event = JSON.parse(doneCall![1] as string);
-    expect(event.coordinatorPlan).toEqual(plan);
+    expect(JSON.parse(parseXaddFields(doneCall!).coordinatorPlan)).toEqual(plan);
   });
 
   it("omits coordinatorPlan from event when Redis key is absent", async () => {
@@ -628,15 +647,13 @@ describe("Redis pub/sub job events", () => {
       task: "No coordinator plan test",
     });
     await new Promise((r) => setTimeout(r, 200));
-    const doneCall = mockRedisPublish.mock.calls.find((c) => {
-      try {
-        const evt = JSON.parse(c[1] as string);
-        return evt.status === "done" && evt.jobId === id;
-      } catch { return false; }
+    const doneCall = mockRedisXadd.mock.calls.find((args) => {
+      const f = parseXaddFields(args);
+      return f.status === "done" && f.jobId === id;
     });
     expect(doneCall).toBeDefined();
-    const event = JSON.parse(doneCall![1] as string);
-    expect(event.coordinatorPlan).toBeUndefined();
+    // coordinatorPlan field should serialize to "null" (no plan)
+    expect(parseXaddFields(doneCall!).coordinatorPlan).toBe("null");
   });
 
   it("does not crash if Redis is unavailable (getRedis returns null)", async () => {
@@ -650,7 +667,7 @@ describe("Redis pub/sub job events", () => {
     const job = manager.getJob(id);
     // Job should still complete normally even without Redis
     expect(job?.status).toBe("done");
-    expect(mockRedisPublish).not.toHaveBeenCalled();
+    expect(mockRedisXadd).not.toHaveBeenCalled();
   });
 });
 
