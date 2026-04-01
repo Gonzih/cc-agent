@@ -1335,6 +1335,11 @@ process.on('unhandledRejection', (reason) => {
 
 // Bootstrap: provision Redis, restore jobs, then start background engines
 await initRedis();
+const redis = getRedis();
+if (redis) {
+  await redis.set('cca:meta:cc-agent:version', PKG_VERSION);
+  logger.info(`[cc-agent] version ${PKG_VERSION} written to Redis`);
+}
 await manager.init();
 await coordinator.start();
 await cronEngine.start();
