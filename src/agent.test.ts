@@ -1,15 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { injectPreamble, DEFAULT_PREAMBLE } from "./preamble.js";
 
-const { mockIsPidAlive, mockJobStoreLoadAll, mockGetRedis, mockRedisPublish, mockRedisLrange, mockRedisGet, mockRedisXadd, mockRedisXtrim, mockRedisLpop, mockRedisDel } = vi.hoisted(() => {
+const { mockIsPidAlive, mockJobStoreLoadAll, mockGetRedis, mockRedisPublish, mockRedisLrange, mockRedisGet, mockRedisXadd, mockRedisXtrim, mockRedisLpop, mockRedisLpush, mockRedisDel } = vi.hoisted(() => {
   const mockRedisPublish = vi.fn(async () => 0);
   const mockRedisLrange = vi.fn(async () => [] as string[]);
   const mockRedisGet = vi.fn(async () => null as string | null);
   const mockRedisXadd = vi.fn(async () => "1-1");
   const mockRedisXtrim = vi.fn(async () => 0);
   const mockRedisLpop = vi.fn(async () => null as string | null);
+  const mockRedisLpush = vi.fn(async () => 1);
   const mockRedisDel = vi.fn(async () => 1);
-  const mockRedisFull = { publish: mockRedisPublish, lrange: mockRedisLrange, get: mockRedisGet, xadd: mockRedisXadd, xtrim: mockRedisXtrim, lpop: mockRedisLpop, del: mockRedisDel };
+  const mockRedisFull = { publish: mockRedisPublish, lrange: mockRedisLrange, get: mockRedisGet, xadd: mockRedisXadd, xtrim: mockRedisXtrim, lpop: mockRedisLpop, lpush: mockRedisLpush, del: mockRedisDel };
   return {
     mockIsPidAlive: vi.fn(() => false),
     mockJobStoreLoadAll: vi.fn(async () => [] as any[]),
@@ -20,6 +21,7 @@ const { mockIsPidAlive, mockJobStoreLoadAll, mockGetRedis, mockRedisPublish, moc
     mockRedisXadd,
     mockRedisXtrim,
     mockRedisLpop,
+    mockRedisLpush,
     mockRedisDel,
   };
 });
@@ -228,8 +230,8 @@ describe("JobManager", () => {
     expect(done).toBe(true);
   });
 
-  it("sendMessage() returns error for unknown job", () => {
-    const result = manager.sendMessage("bad-id", "hello");
+  it("sendMessage() returns error for unknown job", async () => {
+    const result = await manager.sendMessage("bad-id", "hello");
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/not found/i);
   });
@@ -258,9 +260,36 @@ describe("JobManager", () => {
     // Job starts in 'cloning' status
     const job = manager.getJob(id);
     expect(job!.status).toBe("cloning");
-    const result = manager.sendMessage(id, "hello");
+    const result = await manager.sendMessage(id, "hello");
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/not running/i);
+  });
+
+  it("sendMessage() pushes to Redis and returns ok:true for running job", async () => {
+    const id = await manager.spawn({
+      repoUrl: "https://github.com/test/repo.git",
+      task: "Write tests",
+    });
+    // Manually set status to running to simulate a running job
+    const job = manager.getJob(id);
+    job!.status = "running";
+    // Enable Redis mock
+    mockGetRedis.mockReturnValueOnce({
+      publish: mockRedisPublish,
+      lrange: mockRedisLrange,
+      get: mockRedisGet,
+      xadd: mockRedisXadd,
+      xtrim: mockRedisXtrim,
+      lpop: mockRedisLpop,
+      lpush: mockRedisLpush,
+      del: mockRedisDel,
+    } as any);
+    const result = await manager.sendMessage(id, "do the thing");
+    expect(result.ok).toBe(true);
+    expect(mockRedisLpush).toHaveBeenCalledWith(
+      `cca:job:${id}:input`,
+      expect.stringContaining("do the thing"),
+    );
   });
 
   it("spawn() with dockerIsolation stores isolation flag on job", async () => {
