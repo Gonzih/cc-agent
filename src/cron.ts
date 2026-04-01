@@ -29,9 +29,27 @@ export interface CronJob {
 
 const TICK_INTERVAL_MS = 60_000; // 1 minute
 
+// Lua script for atomic check-and-update of lastFiredAt.
+// Returns 1 if updated, 0 if cron was not found (e.g. concurrently deleted).
+const UPDATE_LAST_FIRED_LUA = `
+  local raw = redis.call('GET', KEYS[1])
+  if not raw then return 0 end
+  local crons = cjson.decode(raw)
+  for i, c in ipairs(crons) do
+    if c.id == ARGV[1] then
+      crons[i].lastFiredAt = ARGV[2]
+      redis.call('SET', KEYS[1], cjson.encode(crons))
+      return 1
+    end
+  end
+  return 0
+`;
+
 export class CronEngine {
   private running = false;
   private tickTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly startupTime = Date.now();
+  private readonly firedOnStartup = new Set<string>();
 
   constructor(private manager: JobManager, private namespace: string) {}
 
@@ -73,11 +91,20 @@ export class CronEngine {
   async tick(): Promise<void> {
     const crons = await this.listCrons();
     const now = Date.now();
+    const isFirstTick = now - this.startupTime < TICK_INTERVAL_MS * 2;
+
     for (const cron of crons) {
       if (cron.enabled === false) continue;
       const lastFired = cron.lastFiredAt ? new Date(cron.lastFiredAt).getTime() : 0;
       if (now - lastFired >= cron.intervalMs) {
-        await this.fire(cron);
+        if (isFirstTick && !this.firedOnStartup.has(cron.id)) {
+          // Spread startup fires: stagger by index * 30s to avoid thundering herd
+          const idx = crons.indexOf(cron);
+          setTimeout(() => this.fire(cron).catch(() => {}), idx * 30_000);
+          this.firedOnStartup.add(cron.id);
+        } else {
+          await this.fire(cron);
+        }
       }
     }
   }
@@ -100,16 +127,11 @@ export class CronEngine {
     }
   }
 
-  /** Atomically reload from Redis and update lastFiredAt — skips if cron was deleted. */
+  /** Atomically update lastFiredAt via Lua script — skips if cron was deleted concurrently. */
   private async updateLastFired(id: string): Promise<void> {
     const redis = getRedis();
     if (!redis) return;
-    const raw = await redis.get(this.redisKey());
-    const crons: CronJob[] = raw ? JSON.parse(raw) : [];
-    const idx = crons.findIndex((c) => c.id === id);
-    if (idx === -1) return; // was deleted — don't re-add
-    crons[idx].lastFiredAt = new Date().toISOString();
-    await redis.set(this.redisKey(), JSON.stringify(crons));
+    await redis.eval(UPDATE_LAST_FIRED_LUA, 1, this.redisKey(), id, new Date().toISOString());
   }
 
   // ---------------------------------------------------------------------------
