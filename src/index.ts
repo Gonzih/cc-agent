@@ -803,13 +803,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
     case "send_message": {
       logger.info("tool:send_message", { job_id: a.job_id });
-      const result = manager.sendMessage(a.job_id as string, a.message as string);
+      const result = await manager.sendMessage(a.job_id as string, a.message as string);
       return {
         content: [
           {
             type: "text",
             text: JSON.stringify(result.ok
-              ? { job_id: a.job_id, sent: true, message: "Message delivered to agent stdin." }
+              ? { job_id: a.job_id, sent: true, message: "Message queued for delivery to agent." }
               : { job_id: a.job_id, sent: false, error: result.error }),
           },
         ],

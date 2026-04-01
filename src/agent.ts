@@ -811,9 +811,16 @@ export class JobManager {
           inputPoller = setInterval(async () => {
             try {
               if (!proc.stdin || proc.stdin.destroyed) return;
-              const msg = await redis.lpop(`cca:job:${job.id}:input`);
-              if (msg) {
-                proc.stdin.write(msg + '\n');
+              const raw = await redis.rpop(`cca:job:${job.id}:input`);
+              if (raw) {
+                let content: string;
+                try {
+                  const parsed = JSON.parse(raw) as { id?: string; content?: string; timestamp?: string };
+                  content = parsed.content ?? raw;
+                } catch {
+                  content = raw;
+                }
+                proc.stdin.write(`\n<Human>\n${content}\n`);
                 this.addOutput(job, `[cc-agent] Injected input from Redis queue.`);
               }
             } catch { /* ignore polling errors */ }
@@ -1235,14 +1242,14 @@ export class JobManager {
     }));
   }
 
-  sendMessage(id: string, message: string): { ok: boolean; error?: string } {
+  async sendMessage(id: string, message: string): Promise<{ ok: boolean; error?: string }> {
     const job = this.jobs.get(id);
     if (!job) return { ok: false, error: "Job not found" };
     if (job.status !== "running") return { ok: false, error: "Agent is not running, cannot send message" };
-    if (!job.stdinStream || job.stdinStream.destroyed) {
-      return { ok: false, error: "Agent stdin is not available (may not support interactive input)" };
-    }
-    job.stdinStream.write(message + "\n");
+    const redis = getRedis();
+    if (!redis) return { ok: false, error: "Redis not available" };
+    const entry = JSON.stringify({ id: uuidv4(), content: message, timestamp: new Date().toISOString() });
+    await redis.lpush(`cca:job:${id}:input`, entry);
     return { ok: true };
   }
 
