@@ -4,7 +4,7 @@ import { CronEngine, type CronJob } from "./cron.js";
 // ---------------------------------------------------------------------------
 // Hoisted mocks
 // ---------------------------------------------------------------------------
-const { mockGetRedis, mockRedisGet, mockRedisSet, mockRedisPublish, mockRedisLpush, mockRedisLtrim } =
+const { mockGetRedis, mockRedisGet, mockRedisSet, mockRedisPublish, mockRedisLpush, mockRedisLtrim, mockRedisEval } =
   vi.hoisted(() => {
     const store: Record<string, string> = {};
     const mockRedisGet = vi.fn(async (key: string) => store[key] ?? null);
@@ -15,7 +15,9 @@ const { mockGetRedis, mockRedisGet, mockRedisSet, mockRedisPublish, mockRedisLpu
     const mockRedisPublish = vi.fn(async () => 0);
     const mockRedisLpush = vi.fn(async () => 1);
     const mockRedisLtrim = vi.fn(async () => "OK" as string);
-    const redisMock = { get: mockRedisGet, set: mockRedisSet, publish: mockRedisPublish, lpush: mockRedisLpush, ltrim: mockRedisLtrim };
+    // Default eval: no-op, returns 0. Tests that need real eval behaviour override this.
+    const mockRedisEval = vi.fn(async () => 0);
+    const redisMock = { get: mockRedisGet, set: mockRedisSet, publish: mockRedisPublish, lpush: mockRedisLpush, ltrim: mockRedisLtrim, eval: mockRedisEval };
     return {
       mockGetRedis: vi.fn(() => redisMock as typeof redisMock | null),
       mockRedisGet,
@@ -23,6 +25,7 @@ const { mockGetRedis, mockRedisGet, mockRedisSet, mockRedisPublish, mockRedisLpu
       mockRedisPublish,
       mockRedisLpush,
       mockRedisLtrim,
+      mockRedisEval,
     };
   });
 
@@ -172,6 +175,8 @@ describe("CronEngine — tick / firing", () => {
     vi.clearAllMocks();
     manager = makeManager();
     engine = new CronEngine(manager as any, "test-ns");
+    // Simulate post-startup conditions so jitter logic does not interfere
+    (engine as any).startupTime = 0;
   });
 
   it("fires cron when interval has elapsed", async () => {
@@ -188,9 +193,13 @@ describe("CronEngine — tick / firing", () => {
 
     let stored = JSON.stringify([cron]);
     mockRedisGet.mockImplementation(async () => stored);
-    mockRedisSet.mockImplementation(async (_key: string, value: string) => {
-      stored = value;
-      return "OK";
+    mockRedisEval.mockImplementation(async (_script: string, _n: number, _key: string, id: string, ts: string) => {
+      const data = JSON.parse(stored) as CronJob[];
+      const idx = data.findIndex((c) => c.id === id);
+      if (idx === -1) return 0;
+      data[idx].lastFiredAt = ts;
+      stored = JSON.stringify(data);
+      return 1;
     });
 
     await engine.tick();
@@ -233,9 +242,13 @@ describe("CronEngine — tick / firing", () => {
 
     let stored = JSON.stringify([cron]);
     mockRedisGet.mockImplementation(async () => stored);
-    mockRedisSet.mockImplementation(async (_key: string, value: string) => {
-      stored = value;
-      return "OK";
+    mockRedisEval.mockImplementation(async (_script: string, _n: number, _key: string, id: string, ts: string) => {
+      const data = JSON.parse(stored) as CronJob[];
+      const idx = data.findIndex((c) => c.id === id);
+      if (idx === -1) return 0;
+      data[idx].lastFiredAt = ts;
+      stored = JSON.stringify(data);
+      return 1;
     });
 
     await engine.tick();
@@ -277,26 +290,18 @@ describe("CronEngine — tick / firing", () => {
       createdAt: new Date().toISOString(),
     };
 
-    // First read (tick's listCrons) returns the cron
-    // Second read (updateLastFired's reload) returns empty — simulates concurrent delete
-    let callCount = 0;
-    mockRedisGet.mockImplementation(async () => {
-      callCount++;
-      if (callCount === 1) return JSON.stringify([cron]);
-      return JSON.stringify([]); // deleted between tick and updateLastFired
-    });
-    let savedValue: string | null = null;
-    mockRedisSet.mockImplementation(async (_key: string, value: string) => {
-      savedValue = value;
-      return "OK";
-    });
+    // tick's listCrons sees the cron; but by the time eval runs the cron is gone
+    mockRedisGet.mockResolvedValue(JSON.stringify([cron]));
+    // Lua eval atomically sees the empty array (concurrent delete happened before eval ran)
+    mockRedisEval.mockResolvedValue(0); // 0 = cron not found, nothing written
 
     await engine.tick();
 
     // spawn was still called (fire happened before the delete check)
     expect(manager.spawn).toHaveBeenCalled();
-    // but Redis was NOT written back with the deleted cron
-    expect(savedValue).toBeNull();
+    // eval ran but returned 0 — Redis was NOT written back with the deleted cron
+    expect(mockRedisEval).toHaveBeenCalledTimes(1);
+    expect(mockRedisSet).not.toHaveBeenCalled();
   });
 
   it("updates lastFiredAt after firing", async () => {
@@ -311,15 +316,137 @@ describe("CronEngine — tick / firing", () => {
 
     let stored = JSON.stringify([cron]);
     mockRedisGet.mockImplementation(async () => stored);
-    mockRedisSet.mockImplementation(async (_key: string, value: string) => {
-      stored = value;
-      return "OK";
+    mockRedisEval.mockImplementation(async (_script: string, _n: number, _key: string, id: string, ts: string) => {
+      const data = JSON.parse(stored) as CronJob[];
+      const idx = data.findIndex((c) => c.id === id);
+      if (idx === -1) return 0;
+      data[idx].lastFiredAt = ts;
+      stored = JSON.stringify(data);
+      return 1;
     });
 
     await engine.tick();
 
+    expect(mockRedisEval).toHaveBeenCalledTimes(1);
     const after = JSON.parse(stored) as CronJob[];
     expect(after[0].lastFiredAt).toBeTruthy();
+  });
+});
+
+describe("CronEngine — startup jitter", () => {
+  let engine: CronEngine;
+  let manager: ReturnType<typeof makeManager>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    manager = makeManager();
+    // Instantiate AFTER useFakeTimers so startupTime reflects the fake clock
+    engine = new CronEngine(manager as any, "test-ns");
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function makeEvalMock(getStored: () => string) {
+    return async (_script: string, _n: number, _key: string, id: string, ts: string) => {
+      const data = JSON.parse(getStored()) as CronJob[];
+      const idx = data.findIndex((c) => c.id === id);
+      if (idx === -1) return 0;
+      data[idx].lastFiredAt = ts;
+      return 1;
+    };
+  }
+
+  it("staggers overdue crons on first tick — none fire synchronously", async () => {
+    const crons: CronJob[] = [
+      { id: "c1", chatId: 0, intervalMs: 50, prompt: "p1", schedule: "s1", createdAt: new Date().toISOString() },
+      { id: "c2", chatId: 0, intervalMs: 50, prompt: "p2", schedule: "s2", createdAt: new Date().toISOString() },
+      { id: "c3", chatId: 0, intervalMs: 50, prompt: "p3", schedule: "s3", createdAt: new Date().toISOString() },
+    ];
+    const stored = JSON.stringify(crons);
+    mockRedisGet.mockResolvedValue(stored);
+    mockRedisEval.mockImplementation(makeEvalMock(() => stored));
+
+    await engine.tick();
+
+    // No cron should have fired synchronously during tick()
+    expect(manager.spawn).not.toHaveBeenCalled();
+  });
+
+  it("staggers overdue crons 30s apart on first tick", async () => {
+    const crons: CronJob[] = [
+      { id: "c1", chatId: 0, intervalMs: 50, prompt: "p1", schedule: "s1", createdAt: new Date().toISOString() },
+      { id: "c2", chatId: 0, intervalMs: 50, prompt: "p2", schedule: "s2", createdAt: new Date().toISOString() },
+      { id: "c3", chatId: 0, intervalMs: 50, prompt: "p3", schedule: "s3", createdAt: new Date().toISOString() },
+    ];
+    let stored = JSON.stringify(crons);
+    mockRedisGet.mockImplementation(async () => stored);
+    mockRedisEval.mockImplementation(async (_script: string, _n: number, _key: string, id: string, ts: string) => {
+      const data = JSON.parse(stored) as CronJob[];
+      const idx = data.findIndex((c) => c.id === id);
+      if (idx === -1) return 0;
+      data[idx].lastFiredAt = ts;
+      stored = JSON.stringify(data);
+      return 1;
+    });
+
+    await engine.tick();
+    expect(manager.spawn).not.toHaveBeenCalled();
+
+    // idx=0 fires at 0ms, idx=1 at 30s, idx=2 at 60s
+    await vi.advanceTimersByTimeAsync(1);
+    expect(manager.spawn).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(manager.spawn).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(manager.spawn).toHaveBeenCalledTimes(3);
+  });
+
+  it("fires crons immediately after startup window has passed (120s)", async () => {
+    const cron: CronJob = {
+      id: "c1",
+      chatId: 0,
+      intervalMs: 50,
+      prompt: "p1",
+      schedule: "s1",
+      createdAt: new Date().toISOString(),
+    };
+    const stored = JSON.stringify([cron]);
+    mockRedisGet.mockResolvedValue(stored);
+    mockRedisEval.mockResolvedValue(1);
+
+    // Advance clock past the startup window (TICK_INTERVAL_MS * 2 = 120s)
+    vi.advanceTimersByTime(120_001);
+
+    await engine.tick();
+
+    // Should fire synchronously, not deferred
+    expect(manager.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not stagger the same cron twice on repeat ticks within startup window", async () => {
+    const cron: CronJob = {
+      id: "c1",
+      chatId: 0,
+      intervalMs: 50,
+      prompt: "p1",
+      schedule: "s1",
+      createdAt: new Date().toISOString(),
+    };
+    const stored = JSON.stringify([cron]);
+    mockRedisGet.mockResolvedValue(stored);
+    mockRedisEval.mockResolvedValue(1);
+
+    await engine.tick(); // first tick — deferred
+    expect(manager.spawn).not.toHaveBeenCalled();
+
+    // Second tick within startup window — cron is already in firedOnStartup, fires immediately
+    await engine.tick();
+    expect(manager.spawn).toHaveBeenCalledTimes(1);
   });
 });
 
