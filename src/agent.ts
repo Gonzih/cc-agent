@@ -464,8 +464,7 @@ export class JobManager {
           timestamp: Date.now(),
           coordinatorPlan: planRaw ? (JSON.parse(planRaw) as CoordinatorPlan) : undefined,
         };
-        await redis.publish('cca:events', JSON.stringify(event));
-        // Also write to Redis Stream for durability (fire-and-forget, never crash on failure)
+        // Write to Redis Stream for durability (fire-and-forget, never crash on failure)
         try {
           await redis.xadd(
             'cca:event-stream', '*',
@@ -778,6 +777,51 @@ export class JobManager {
         this.kills.set(job.id, () => proc.kill());
         job.stdinStream = proc.stdin ?? null;
 
+        // --- Signal key polling (cancel/wake) and input polling ---
+        const redis = getRedis();
+        let signalPoller: ReturnType<typeof setInterval> | null = null;
+        let inputPoller: ReturnType<typeof setInterval> | null = null;
+        const stopPollers = () => {
+          if (signalPoller) { clearInterval(signalPoller); signalPoller = null; }
+          if (inputPoller) { clearInterval(inputPoller); inputPoller = null; }
+        };
+
+        if (redis) {
+          // Fix 2: Poll cca:job:{id}:signal every 4s for cancel/wake
+          signalPoller = setInterval(async () => {
+            try {
+              const sig = await redis.get(`cca:job:${job.id}:signal`);
+              if (!sig) return;
+              await redis.del(`cca:job:${job.id}:signal`);
+              if (sig === 'cancel') {
+                stopPollers();
+                job.status = 'cancelled';
+                job.finishedAt = new Date();
+                this.addOutput(job, '[cc-agent] Cancelled via signal key.');
+                this.persistJob(job);
+                this.publishJobEvent(job);
+                proc.kill();
+              }
+              // 'wake' signal is only relevant when sleeping; ignore here
+            } catch { /* ignore polling errors */ }
+          }, 4000);
+          (signalPoller as NodeJS.Timeout).unref();
+
+          // Fix 4: Poll cca:job:{id}:input every 3s for in-flight messages
+          inputPoller = setInterval(async () => {
+            try {
+              if (!proc.stdin || proc.stdin.destroyed) return;
+              const msg = await redis.lpop(`cca:job:${job.id}:input`);
+              if (msg) {
+                proc.stdin.write(msg + '\n');
+                this.addOutput(job, `[cc-agent] Injected input from Redis queue.`);
+              }
+            } catch { /* ignore polling errors */ }
+          }, 3000);
+          (inputPoller as NodeJS.Timeout).unref();
+        }
+        // ----------------------------------------------------------
+
         proc.on("session", (sid: string) => {
           if (!job.sessionIdAfter) {
             job.sessionIdAfter = sid;
@@ -842,11 +886,14 @@ export class JobManager {
         proc.on("error", (err) => { reject(err); });
 
         proc.on("exit", (code) => {
+          stopPollers();
           job.exitCode = code ?? undefined;
           job.stdinStream = null;
           this.kills.delete(job.id);
           // Resolve on sleep/rotation (we killed the proc intentionally) or clean exit
           if (sleepRequested || tokenRotationRequested || code === 0 || code === null) resolve();
+          // Cancelled via signal key — resolve cleanly (job already marked cancelled)
+          else if (job.status === 'cancelled') resolve();
           else reject(new Error(`Claude exited with code ${code}`));
         });
       });
@@ -1050,6 +1097,25 @@ export class JobManager {
     }, delay);
     timer.unref();
     this.wakeTimers.set(job.id, timer);
+
+    // Fix 2: Poll for wake signal while sleeping so remote callers can wake early
+    const redis = getRedis();
+    if (redis) {
+      const wakePoller = setInterval(async () => {
+        if (job.status !== 'sleeping') { clearInterval(wakePoller); return; }
+        try {
+          const sig = await redis.get(`cca:job:${job.id}:signal`);
+          if (sig === 'wake') {
+            await redis.del(`cca:job:${job.id}:signal`);
+            clearInterval(wakePoller);
+            const t = this.wakeTimers.get(job.id);
+            if (t) { clearTimeout(t); this.wakeTimers.delete(job.id); }
+            this.doWake(job);
+          }
+        } catch { /* ignore */ }
+      }, 4000);
+      (wakePoller as NodeJS.Timeout).unref();
+    }
   }
 
   private doWake(job: Job): void {
