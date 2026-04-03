@@ -45,6 +45,61 @@ const UPDATE_LAST_FIRED_LUA = `
   return 0
 `;
 
+// Lua script for atomic deletion of a cron by id.
+// Returns 1 if found and removed, 0 if not found.
+const DELETE_CRON_LUA = `
+  local raw = redis.call('GET', KEYS[1])
+  if not raw then return 0 end
+  local crons = cjson.decode(raw)
+  local new = {}
+  local found = 0
+  for _, c in ipairs(crons) do
+    if c.id == ARGV[1] then
+      found = 1
+    else
+      table.insert(new, c)
+    end
+  end
+  if found == 1 then
+    redis.call('SET', KEYS[1], cjson.encode(new))
+  end
+  return found
+`;
+
+// Lua script for atomic addition of a cron (skips if id already exists).
+// Returns 1 if added, 0 if duplicate.
+const ADD_CRON_LUA = `
+  local raw = redis.call('GET', KEYS[1])
+  local crons = raw and cjson.decode(raw) or {}
+  local newCron = cjson.decode(ARGV[1])
+  for _, c in ipairs(crons) do
+    if c.id == newCron.id then return 0 end
+  end
+  table.insert(crons, newCron)
+  redis.call('SET', KEYS[1], cjson.encode(crons))
+  return 1
+`;
+
+// Lua script for atomic update of a cron's fields.
+// ARGV[1] = id, ARGV[2] = JSON of partial updates.
+// Returns 1 if updated, 0 if not found.
+const UPDATE_CRON_LUA = `
+  local raw = redis.call('GET', KEYS[1])
+  if not raw then return 0 end
+  local crons = cjson.decode(raw)
+  local updates = cjson.decode(ARGV[2])
+  for i, c in ipairs(crons) do
+    if c.id == ARGV[1] then
+      for k, v in pairs(updates) do
+        crons[i][k] = v
+      end
+      redis.call('SET', KEYS[1], cjson.encode(crons))
+      return 1
+    end
+  end
+  return 0
+`;
+
 export class CronEngine {
   private running = false;
   private tickTimer: ReturnType<typeof setTimeout> | null = null;
@@ -56,6 +111,11 @@ export class CronEngine {
   /** Crons Redis key for this namespace. */
   private redisKey(): string {
     return `cca:crons:${this.namespace}`;
+  }
+
+  /** Tombstone set key — deleted cron ids, TTL 7 days. */
+  private deletedKey(): string {
+    return `cca:deleted-crons:${this.namespace}`;
   }
 
   async start(): Promise<void> {
@@ -141,45 +201,54 @@ export class CronEngine {
   async listCrons(): Promise<CronJob[]> {
     const redis = getRedis();
     if (!redis) return [];
-    const raw = await redis.get(this.redisKey());
+    const [raw, deletedMembers] = await Promise.all([
+      redis.get(this.redisKey()),
+      redis.smembers(this.deletedKey()),
+    ]);
     if (!raw) return [];
     try {
-      return JSON.parse(raw) as CronJob[];
+      const deletedSet = new Set(deletedMembers);
+      const all = JSON.parse(raw) as CronJob[];
+      return all.filter((c) => !deletedSet.has(c.id));
     } catch {
       return [];
     }
   }
 
   async addCron(cron: Omit<CronJob, "id" | "createdAt">): Promise<CronJob> {
+    const redis = getRedis();
     const newCron: CronJob = {
       ...cron,
       id: uuidv4(),
       createdAt: new Date().toISOString(),
     };
-    const crons = await this.listCrons();
-    crons.push(newCron);
-    await this.saveCrons(crons);
+    if (redis) {
+      await redis.eval(ADD_CRON_LUA, 1, this.redisKey(), JSON.stringify(newCron));
+    }
     logger.info("cron:added", { id: newCron.id, schedule: newCron.schedule });
     return newCron;
   }
 
   async deleteCron(id: string): Promise<boolean> {
-    const crons = await this.listCrons();
-    const idx = crons.findIndex((c) => c.id === id);
-    if (idx === -1) return false;
-    crons.splice(idx, 1);
-    await this.saveCrons(crons);
-    logger.info("cron:deleted", { id });
-    return true;
+    const redis = getRedis();
+    if (!redis) return false;
+    const found = await redis.eval(DELETE_CRON_LUA, 1, this.redisKey(), id);
+    if (found === 1) {
+      await redis.sadd(this.deletedKey(), id);
+      await redis.expire(this.deletedKey(), 7 * 24 * 3600);
+      logger.info("cron:deleted", { id });
+    }
+    return found === 1;
   }
 
   async updateCron(id: string, updates: Partial<CronJob>): Promise<CronJob | null> {
+    const redis = getRedis();
+    if (!redis) return null;
+    const found = await redis.eval(UPDATE_CRON_LUA, 1, this.redisKey(), id, JSON.stringify(updates));
+    if (!found) return null;
+    // Read back the merged cron — we need the full object as the return value
     const crons = await this.listCrons();
-    const idx = crons.findIndex((c) => c.id === id);
-    if (idx === -1) return null;
-    crons[idx] = { ...crons[idx], ...updates, id };
-    await this.saveCrons(crons);
-    return crons[idx];
+    return crons.find((c) => c.id === id) ?? null;
   }
 
   private async saveCrons(crons: CronJob[]): Promise<void> {
