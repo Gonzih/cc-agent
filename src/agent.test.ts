@@ -214,6 +214,21 @@ describe("JobManager", () => {
     expect(job!.status).toBe("cancelled");
   });
 
+  it("kills all active subprocesses when SIGTERM fires", async () => {
+    const id = await manager.spawn({
+      repoUrl: "https://github.com/test/repo.git",
+      task: "Write tests",
+    });
+    // Inject a mock kill function directly into the kills map
+    const mockKill = vi.fn();
+    (manager as any).kills.set(id, mockKill);
+
+    // Trigger the SIGTERM handler registered in the constructor
+    process.emit("SIGTERM");
+
+    expect(mockKill).toHaveBeenCalled();
+  });
+
   it("getOutput() returns initial output lines", async () => {
     const id = await manager.spawn({
       repoUrl: "https://github.com/test/repo.git",
