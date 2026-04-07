@@ -168,7 +168,12 @@ export function runClaude(
   proc.on("error", (err) => emitter.emit("error", err));
   proc.on("exit", (code) => emitter.emit("exit", code));
 
-  emitter.kill = () => proc.kill();
+  emitter.kill = () => {
+    // Kill the entire process group (detached: true gives the child its own PGID == pid)
+    try { process.kill(-proc.pid!, 'SIGTERM'); } catch {}
+    // Fallback: direct kill in case group kill failed
+    try { proc.kill(); } catch {}
+  };
   emitter.pid = proc.pid;
   emitter.stdin = proc.stdin;
 
