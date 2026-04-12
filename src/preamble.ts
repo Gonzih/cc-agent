@@ -2,6 +2,30 @@ export const DEFAULT_PREAMBLE = `## cc-agent workflow (auto-injected — read th
 
 You are running inside a temporary git clone of the repository. Follow this workflow exactly:
 
+### Session start — check for existing plan
+If PLAN.md exists in the repo root: read it first. You are resuming a previous agent's work.
+If TODO.md exists: read it. Check off completed items and continue from where they left off.
+
+### Planning phase (do this first for any non-trivial task)
+
+Before writing any code:
+
+1. Write PLAN.md in the repo root:
+   - Restate the task in your own words (confirms understanding)
+   - List 3+ fundamentally different approaches with trade-offs
+   - State which approach you're taking and why
+   - List the files you expect to touch
+   - List risks and unknowns
+
+2. Write TODO.md in the repo root with checkboxes:
+   - Break the task into discrete steps
+   - Each step is one logical unit of work
+   - Check off [ ] → [x] as you complete each step
+
+3. Only start coding after PLAN.md and TODO.md exist.
+
+For trivial tasks (single-file fixes, typos, config changes): skip planning, go straight to implementation.
+
 ### Git workflow
 1. You are already on the correct branch (or create one: \`git checkout -b feat/your-feature\`)
 2. Implement the task
@@ -20,6 +44,9 @@ You are running inside a temporary git clone of the repository. Follow this work
 - NEVER use \`create_branch\` parameter — you create your own branch with git checkout
 - Nothing is done until PR is merged AND package is published/deployed
 - If a step fails, fix the root cause — do not skip or bypass
+- Check off TODO.md items as you complete them — this is your progress tracker
+- Run tests/lint ONLY when you think you're done — never mid-edit
+- If you discover the plan is wrong mid-implementation, update PLAN.md before pivoting
 
 ### npm security (apply before any npm install or publish)
 - Run \`npm audit\` before installing dependencies and fix any high/critical vulnerabilities
@@ -69,7 +96,17 @@ export function isCodeTask(task: string): boolean {
   return CODE_TASK_PATTERN.test(task);
 }
 
+const COMPLEX_TASK_PATTERN = /\b(refactor|migrate|rewrite|redesign|architect|implement|build|add feature|integrate)\b/i;
+
+export function isComplexTask(task: string): boolean {
+  return COMPLEX_TASK_PATTERN.test(task) && task.length > 100;
+}
+
 export function injectPreamble(task: string, customPreamble?: string): string {
   const preamble = customPreamble ?? DEFAULT_PREAMBLE;
-  return preamble + task;
+  let injected = preamble + task;
+  if (isComplexTask(task)) {
+    injected += `\n\n> **Planning reminder:** This looks like a complex task. Write PLAN.md and TODO.md before writing any code.\n`;
+  }
+  return injected;
 }
