@@ -962,6 +962,26 @@ export class JobManager {
         }
       }
 
+      // Read plan artifacts if they exist — attach to job output for coordinator visibility
+      if (workDir) {
+        const planPath = join(workDir, 'PLAN.md');
+        const todoPath = join(workDir, 'TODO.md');
+        if (existsSync(planPath)) {
+          try {
+            const planContent = await readFile(planPath, 'utf-8');
+            this.addOutput(job, `[cc-agent] PLAN.md:\n${planContent.trim()}`);
+            logger.info("job:plan-artifact-read", { id: job.id, bytes: planContent.length });
+          } catch { /* non-fatal */ }
+        }
+        if (existsSync(todoPath)) {
+          try {
+            const todoContent = await readFile(todoPath, 'utf-8');
+            this.addOutput(job, `[cc-agent] TODO.md:\n${todoContent.trim()}`);
+            logger.info("job:todo-artifact-read", { id: job.id, bytes: todoContent.length });
+          } catch { /* non-fatal */ }
+        }
+      }
+
       if (job.ollamaModel) {
         this.writeModelRating(job).catch(() => {});
       }
