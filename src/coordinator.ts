@@ -112,24 +112,12 @@ export class Coordinator {
       if (coordinatorPlan?.next_step) {
         await this.spawnNext(jobId, title, repoUrl, coordinatorPlan);
       }
-
-      // 2. Notify done (always, for all completed jobs)
-      await notify(this.namespace, `✓ ${title} done\n${repoUrl}`);
-
-      // 3. Additional low-score warning
-      if (typeof score === "number" && score < LOW_SCORE_THRESHOLD) {
-        await notify(
-          this.namespace,
-          `⚠ ${title} low score (${score.toFixed(2)})\n${repoUrl}`,
-        );
-      }
     }
 
-    if (status === "failed") {
-      await notify(
-        this.namespace,
-        `✗ ${title} failed\n${repoUrl}`,
-      );
+    if (status === "done" || status === "failed") {
+      const icon = status === "done" ? "✅" : "❌";
+      const scoreStr = typeof score === "number" ? ` (score: ${score.toFixed(2)})` : "";
+      await notify(this.namespace, `${icon} ${title}${scoreStr}\n${repoUrl}`);
     }
   }
 
