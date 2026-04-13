@@ -165,10 +165,20 @@ export function normalizeRepoUrl(url: string): string {
 }
 
 /** Build a preamble prefix with prior repo learnings. */
-function buildLearningsPreamble(learnings: string[], rk: string): string {
+export function buildLearningsPreamble(learnings: string[], rk: string): string {
   if (!learnings.length) return "";
-  const items = learnings.join("\n");
-  return `Repo notes (${rk}):\n${items}\n\n---\n\n`;
+  const compressed = learnings.find(i => i.startsWith("[COMPRESSED SUMMARY"));
+  const recents = learnings.filter(i => !i.startsWith("[COMPRESSED SUMMARY"));
+
+  let result = `Repo notes (${rk}):\n`;
+  if (compressed) {
+    result += `### Synthesized History\n${compressed}\n\n`;
+  }
+  if (recents.length > 0) {
+    result += `### Recent Observations\n${recents.map(i => `- ${i}`).join('\n')}\n`;
+  }
+  result += `\n---\n\n`;
+  return result;
 }
 
 /** Extract a quality score from job output lines. Exported for testing. */
@@ -504,7 +514,7 @@ export class JobManager {
   async spawn(opts: SpawnOptions): Promise<string> {
     // Prepend prior repo learnings to the task
     const rk = repoKey(opts.repoUrl);
-    const priorLearnings = await learningsStore.getLearnings(rk, 5);
+    const priorLearnings = await learningsStore.getLearnings(rk, 6);
     let task = opts.task;
     if (priorLearnings.length) {
       const firstLine = opts.task.split('\n')[0];

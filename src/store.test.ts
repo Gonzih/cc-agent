@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { JobStore, LearningsStore } from "./store.js";
+import { JobStore, LearningsStore, LEARNINGS_COMPRESS_THRESHOLD, LEARNINGS_KEEP_RECENT } from "./store.js";
 import type { JobRecord } from "./store.js";
 
 // Restore namespace env vars after each test (test-setup.ts flushes Redis DB)
@@ -150,5 +150,33 @@ describe("LearningsStore", () => {
     }
     const count = await store.getLearningsCount("cap-ns");
     expect(count).toBeLessThanOrEqual(50);
+  });
+
+  it("compressIfNeeded is a no-op without Redis (in-memory store)", async () => {
+    const store = new LearningsStore();
+    // Add fewer than threshold entries — no-op regardless
+    for (let i = 0; i < LEARNINGS_COMPRESS_THRESHOLD - 1; i++) {
+      await store.addLearning("compress-noop-ns", `entry-${i}`);
+    }
+    // Should not throw and should not change state
+    await store.compressIfNeeded("compress-noop-ns");
+    const count = await store.getLearningsCount("compress-noop-ns");
+    expect(count).toBe(LEARNINGS_COMPRESS_THRESHOLD - 1);
+  });
+
+  it("compressIfNeeded is a no-op when count is below threshold", async () => {
+    const store = new LearningsStore();
+    await store.addLearning("compress-low-ns", "only entry");
+    await store.compressIfNeeded("compress-low-ns");
+    const learnings = await store.getLearnings("compress-low-ns", 10);
+    // Entry should still be there, unchanged
+    expect(learnings[0]).toBe("only entry");
+  });
+
+  it("LEARNINGS_COMPRESS_THRESHOLD and LEARNINGS_KEEP_RECENT are positive integers", () => {
+    expect(LEARNINGS_COMPRESS_THRESHOLD).toBeGreaterThan(0);
+    expect(LEARNINGS_KEEP_RECENT).toBeGreaterThan(0);
+    expect(Number.isInteger(LEARNINGS_COMPRESS_THRESHOLD)).toBe(true);
+    expect(Number.isInteger(LEARNINGS_KEEP_RECENT)).toBe(true);
   });
 });
