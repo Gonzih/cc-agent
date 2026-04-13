@@ -116,25 +116,13 @@ function parseResetTime(text: string): Date {
   }
 }
 
-/** Extract the ## LEARNINGS block from job output lines (everything from that heading to end). */
+/** Extract the content of the ## LEARNINGS block (excludes the heading line itself). */
 function extractLearnings(output: string[]): string | null {
   const idx = output.findIndex((line) => /^##\s+LEARNINGS\b/.test(line.trim()));
   if (idx === -1) return null;
-  return output.slice(idx).join("\n").trim();
+  return output.slice(idx + 1).join("\n").trim();
 }
 
-/** Compress a raw learnings block to bullet points only, max 8 bullets. */
-function compressLearnings(raw: string): string {
-  return raw
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l.startsWith("-") || l.startsWith("•"))
-    .map((l) => l.replace(/^[-•]\s*/, "").trim())
-    .filter((l) => l.length > 10 && l.length < 200)
-    .slice(0, 8)
-    .map((l) => `- ${l}`)
-    .join("\n");
-}
 
 /** Derive a repo-scoped key from a repo URL.
  *  "https://github.com/Gonzih/cc-agent" → "gonzih/cc-agent"
@@ -164,21 +152,10 @@ export function normalizeRepoUrl(url: string): string {
   }
 }
 
-/** Build a preamble prefix with prior repo learnings. */
+/** Build a preamble prefix with prior repo learnings (single compressed block). */
 export function buildLearningsPreamble(learnings: string[], rk: string): string {
   if (!learnings.length) return "";
-  const compressed = learnings.find(i => i.startsWith("[COMPRESSED SUMMARY"));
-  const recents = learnings.filter(i => !i.startsWith("[COMPRESSED SUMMARY"));
-
-  let result = `Repo notes (${rk}):\n`;
-  if (compressed) {
-    result += `### Synthesized History\n${compressed}\n\n`;
-  }
-  if (recents.length > 0) {
-    result += `### Recent Observations\n${recents.map(i => `- ${i}`).join('\n')}\n`;
-  }
-  result += `\n---\n\n`;
-  return result;
+  return `## Institutional Knowledge — ${rk}\n(Merge these with your new observations in the ## LEARNINGS block at the end)\n\n${learnings[0]}\n\n---\n\n`;
 }
 
 /** Extract a quality score from job output lines. Exported for testing. */
@@ -514,7 +491,7 @@ export class JobManager {
   async spawn(opts: SpawnOptions): Promise<string> {
     // Prepend prior repo learnings to the task
     const rk = repoKey(opts.repoUrl);
-    const priorLearnings = await learningsStore.getLearnings(rk, 6);
+    const priorLearnings = await learningsStore.getLearnings(rk, 1);
     let task = opts.task;
     if (priorLearnings.length) {
       const firstLine = opts.task.split('\n')[0];
@@ -961,15 +938,17 @@ export class JobManager {
         });
       }
 
-      // Extract and store learnings scoped to the repo
+      // Extract and store learnings scoped to the repo (replace with agent's compressed block)
       const learnings = extractLearnings(job.output);
-      if (learnings) {
+      if (learnings && learnings.length > 20) {
         const rk = repoKey(job.repoUrl);
-        const compressed = compressLearnings(learnings);
-        if (compressed) {
-          learningsStore.addLearning(rk, compressed).catch(() => {});
-          logger.info("job:learnings-extracted", { id: job.id, repoKey: rk, length: compressed.length });
-        }
+        (async () => {
+          await learningsStore.clearLearnings(rk);
+          await learningsStore.addLearning(rk, learnings);
+          logger.info("learnings:replaced-with-compressed", { id: job.id, repoKey: rk, length: learnings.length });
+        })().catch((err) => {
+          logger.warn("job:learnings-store-failed", { id: job.id, err: String(err) });
+        });
       }
 
       // Read plan artifacts if they exist — attach to job output for coordinator visibility
