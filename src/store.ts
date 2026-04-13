@@ -356,6 +356,9 @@ export class PlanStore {
 
 const LEARNINGS_MAX = 50;
 const LEARNINGS_TTL_SECONDS = 90 * 24 * 60 * 60; // 90 days
+export const LEARNINGS_COMPRESS_THRESHOLD = 15;
+export const LEARNINGS_KEEP_RECENT = 5;
+export const COMPRESSED_SUMMARY_PREFIX = "[COMPRESSED SUMMARY";
 
 export class LearningsStore {
   private memLearnings = new Map<string, string[]>(); // namespace → entries (newest first)
@@ -373,6 +376,10 @@ export class LearningsStore {
         await redis.ltrim(key, 0, LEARNINGS_MAX - 1);
         await redis.expire(key, LEARNINGS_TTL_SECONDS);
         logger.info("learnings:added", { namespace, length: content.length });
+        // Background compression — don't block the caller
+        this.compressIfNeeded(namespace).catch(err => {
+          logger.warn("learnings:compress background failed", { err: String(err) });
+        });
         return;
       } catch (err) {
         logger.error("learnings:addLearning Redis failed", err);
@@ -382,6 +389,101 @@ export class LearningsStore {
     list.unshift(content);
     if (list.length > LEARNINGS_MAX) list.splice(LEARNINGS_MAX);
     this.memLearnings.set(namespace, list);
+  }
+
+  /**
+   * Compress old learnings into a synthesized summary + keep N most recent.
+   * Uses Claude Haiku directly. Only runs when entry count >= LEARNINGS_COMPRESS_THRESHOLD.
+   * Requires Redis — no-op without it.
+   */
+  async compressIfNeeded(namespace: string): Promise<void> {
+    const redis = getRedis();
+    if (!redis) return;
+
+    const count = await this.getLearningsCount(namespace);
+    if (count < LEARNINGS_COMPRESS_THRESHOLD) return;
+
+    const key = this.learningsKey(namespace);
+    const all = await redis.lrange(key, 0, -1);
+    if (all.length < LEARNINGS_COMPRESS_THRESHOLD) return;
+
+    // Keep the N most recent raw entries as-is; compress the rest
+    const recent = all.slice(0, LEARNINGS_KEEP_RECENT);
+    const toCompress = all.slice(LEARNINGS_KEEP_RECENT);
+
+    const apiKey = process.env.ANTHROPIC_API_KEY
+      ?? process.env.CLAUDE_CODE_TOKEN
+      ?? process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    if (!apiKey) {
+      logger.warn("learnings:compress: no API key available, skipping compression");
+      return;
+    }
+
+    const prompt = `You are compressing agent learnings for the namespace "${namespace}".
+These are observations accumulated across multiple agent runs. Synthesize them into a single dense summary.
+
+Rules:
+- Merge duplicates and contradictions (prefer newer information — recent entries come first)
+- Preserve all unique, actionable insights
+- Remove vague or obvious statements
+- Keep specific commands, file paths, env vars, version numbers
+- Output as bullet points, max 20 bullets
+- Start each bullet with a category tag: [env], [toolchain], [pattern], [gotcha], [workflow]
+
+Entries to compress (newest first):
+${toCompress.map((e, i) => `[${i + 1}] ${e}`).join('\n\n')}
+
+Output ONLY the compressed bullet list. No preamble. No explanation.`;
+
+    let compressed: string;
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 1024,
+          messages: [{ role: "user", content: prompt }],
+        }),
+      });
+
+      if (!res.ok) {
+        logger.warn("learnings:compress: API error", { status: res.status });
+        return;
+      }
+
+      const data = await res.json() as { content: Array<{ type: string; text: string }> };
+      compressed = data.content.find(b => b.type === "text")?.text ?? "";
+      if (!compressed.trim()) return;
+    } catch (err) {
+      logger.warn("learnings:compress: fetch failed", { err: String(err) });
+      return;
+    }
+
+    const date = new Date().toISOString().slice(0, 10);
+    const compressedEntry = `${COMPRESSED_SUMMARY_PREFIX} — ${date} — synthesized from ${toCompress.length} entries]\n${compressed}`;
+
+    // Atomically replace list: DEL + RPUSH(compressedEntry) + LPUSH(recent[N-1..0])
+    // Result order in LRANGE 0 -1: [recent[0], ..., recent[N-1], compressedEntry]
+    const pipeline = redis.pipeline();
+    pipeline.del(key);
+    pipeline.rpush(key, compressedEntry);
+    for (let i = recent.length - 1; i >= 0; i--) {
+      pipeline.lpush(key, recent[i]);
+    }
+    pipeline.expire(key, LEARNINGS_TTL_SECONDS);
+    await pipeline.exec();
+
+    logger.info("learnings:compressed", {
+      namespace,
+      from: all.length,
+      to: recent.length + 1,
+      compressedChars: compressedEntry.length,
+    });
   }
 
   async getLearnings(namespace: string, limit = 10): Promise<string[]> {

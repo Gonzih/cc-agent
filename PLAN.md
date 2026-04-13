@@ -1,27 +1,33 @@
 # PLAN.md
 
 ## Task Summary
-Add two new MCP tools (`list_active_repos`, `get_pubsub_status`) and update the coordinator notification format to use emoji icons with scores.
+Add semantic compression to `LearningsStore`: when a namespace accumulates >= 15 entries, automatically call Claude Haiku to synthesize old entries into a single tagged bullet summary, keeping the 5 most recent raw entries. Update the preamble formatter to display compressed vs raw entries distinctly.
 
 ## Approaches
 
-### Fix 1: list_active_repos
-- **Approach A (Redis SMEMBERS + pipeline)**: Scan `cca:jobs:*` keys, fetch job records in pipeline, aggregate. Chosen — matches provided spec.
-- **Approach B (Stream scan)**: Scan event stream. Too expensive and doesn't map well to namespace aggregation.
+### Approach A — fire-and-forget background compression (chosen)
+Hook `compressIfNeeded` into `addLearning` as a background promise. Caller is not blocked. Compression happens after write. Simple, no latency impact.
 
-### Fix 2: get_pubsub_status
-- **Approach A (PUBSUB CHANNELS + NUMSUB)**: Call `redis.pubsub("CHANNELS", "cca:*")` then `NUMSUB`. Chosen — matches spec, direct Redis introspection.
-- **Approach B (Separate health check HTTP endpoint)**: Requires more infrastructure. Overkill.
+### Approach B — synchronous compression on add
+Block `addLearning` until compression completes. Adds latency to every add when near threshold. Not acceptable.
 
-### Fix 3: Coordinator notification format
-- **Current state**: Already notifies ALL done and failed. Needs emoji icons (✅/❌) and score in message.
-- **Approach**: Unify done/failed into single pattern with icon and optional score string. Remove the separate low-score warning (it's now embedded in score field).
+### Approach C — separate scheduled compression job
+Add a cron/interval that runs compression periodically. More moving parts, harder to test, possible races. Overkill for this case.
+
+## Chosen: Approach A
 
 ## Files to Touch
-- `src/index.ts` — add 2 tool definitions + 2 handlers
-- `src/coordinator.ts` — update `processEvent()` notification format
+- `src/store.ts` — add `compressIfNeeded`, hook into `addLearning`, export threshold constants
+- `src/agent.ts` — update `buildLearningsPreamble` to show compressed/recent separately, increase getLearnings limit to 6
+- `src/store.test.ts` — add tests for `compressIfNeeded` no-op path and preamble formatting
 
 ## Risks
-- `redis.keys("cca:jobs:*")` could be slow on large Redis instances; acceptable for now
-- `PUBSUB CHANNELS` / `NUMSUB` are O(N) but cca:* scope limits it
-- Coordinator test `"does not publish notification for high-score done event"` was previously inverted — must check test file to see current state
+- `fetch` is Node 18+ built-in; package targets Node 22 — fine
+- API key may be absent in some deployments — handled by early return with warn log
+- Compression could fail mid-write (pipeline partially executed) — DEL + RPUSH/LPUSH is not atomic across commands but pipeline is batched; acceptable risk since worst case is a loss of 1 compression attempt
+- In-memory fallback path for `compressIfNeeded` returns early (no Redis → no-op) — correct behavior
+
+## List ordering
+LPUSH → newest at head. LRANGE 0 -1 → [newest, ..., oldest].
+After compress: pipeline DEL + RPUSH(compressedEntry) + LPUSH(recent[N-1]) + ... + LPUSH(recent[0])
+Result: [recent[0], recent[1], ..., recent[4], compressedEntry] ✓
