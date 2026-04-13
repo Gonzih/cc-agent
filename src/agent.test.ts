@@ -805,30 +805,17 @@ describe("buildLearningsPreamble", () => {
     expect(buildLearningsPreamble([], "owner/repo")).toBe("");
   });
 
-  it("formats raw entries under Recent Observations", () => {
-    const result = buildLearningsPreamble(["entry one", "entry two"], "owner/repo");
-    expect(result).toContain("Repo notes (owner/repo):");
-    expect(result).toContain("### Recent Observations");
-    expect(result).toContain("- entry one");
-    expect(result).toContain("- entry two");
-    expect(result).not.toContain("### Synthesized History");
+  it("shows institutional knowledge header with repo key", () => {
+    const result = buildLearningsPreamble(["- [gotcha] some observation"], "owner/repo");
+    expect(result).toContain("## Institutional Knowledge — owner/repo");
+    expect(result).toContain("- [gotcha] some observation");
+    expect(result).toContain("Merge these with your new observations");
   });
 
-  it("shows compressed summary under Synthesized History when present", () => {
-    const compressed = "[COMPRESSED SUMMARY — 2026-04-13 — synthesized from 12 entries]\n- [gotcha] use foo bar";
-    const result = buildLearningsPreamble([compressed, "recent one"], "owner/repo");
-    expect(result).toContain("### Synthesized History");
-    expect(result).toContain(compressed);
-    expect(result).toContain("### Recent Observations");
-    expect(result).toContain("- recent one");
-  });
-
-  it("handles only a compressed summary with no recent entries", () => {
-    const compressed = "[COMPRESSED SUMMARY — 2026-04-13 — synthesized from 12 entries]\n- [env] NODE_ENV=production";
-    const result = buildLearningsPreamble([compressed], "owner/repo");
-    expect(result).toContain("### Synthesized History");
-    expect(result).toContain(compressed);
-    expect(result).not.toContain("### Recent Observations");
+  it("uses only the first entry (the single compressed block)", () => {
+    const result = buildLearningsPreamble(["first entry", "second entry"], "owner/repo");
+    expect(result).toContain("first entry");
+    expect(result).not.toContain("second entry");
   });
 
   it("includes trailing separator", () => {

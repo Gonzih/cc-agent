@@ -55,18 +55,27 @@ For trivial tasks (single-file fixes, typos, config changes): skip planning, go 
 - Use \`npm install --ignore-scripts\` for packages from untrusted sources
 
 ### Learnings (REQUIRED — write this at the end of every job)
-At the very end of your output, after all work is done, append a \`## LEARNINGS\` section:
+At the very end of your output, write a \`## LEARNINGS\` section.
 
+You will be given existing learnings for this namespace above (under "Institutional Knowledge").
+Your job: produce a SINGLE compressed block that merges old + new observations.
+
+Rules:
+- Start from the existing learnings (shown above) — don't ignore them
+- Add new observations from this job
+- Remove duplicates (prefer newer info on conflicts)
+- Remove vague or obvious statements
+- Keep specific: commands, file paths, env vars, version numbers, error messages
+- Max 20 bullets, tagged: [env] [toolchain] [pattern] [gotcha] [workflow] [bug]
+- This compressed block REPLACES the old learnings — write it as if it's the new ground truth
+
+Format:
 \`\`\`
 ## LEARNINGS
-<!-- cc-agent extracts this block and stores it for future agents in this namespace -->
-- What worked: [specific techniques, commands, patterns that succeeded]
-- What failed: [specific approaches that didn't work and why]
-- Gotchas: [non-obvious things about this codebase/environment]
-- Recommendations for next agent: [what to do differently]
+- [tag] specific observation
+- [tag] specific observation
+...
 \`\`\`
-
-This is not optional — every completed job must end with this block so the namespace accumulates institutional knowledge.
 
 ### Smoke check before full implementation
 Before committing to a full implementation, run a quick sanity check (\`npm test\`, \`cargo test\`, \`go test ./...\`, etc.) to verify the foundation is solid. If the quick check fails (missing deps, broken toolchain, compile errors), report the failure immediately rather than spending time on a broken foundation.
