@@ -609,6 +609,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       description: "Return the last 20 notification messages sent by the coordinator for the current namespace.",
       inputSchema: { type: "object", properties: {} },
     },
+    {
+      name: "list_active_repos",
+      description: "List all active namespaces/repos with job counts and recent activity. Each namespace = one project column in the UI.",
+      inputSchema: { type: "object", properties: {}, required: [] },
+    },
+    {
+      name: "get_pubsub_status",
+      description: "Debug: show all active Redis pub/sub channels and subscriber counts. Use to diagnose chat sync issues.",
+      inputSchema: { type: "object", properties: {}, required: [] },
+    },
   ],
 }));
 
@@ -1318,6 +1328,92 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         messages = await redis.lrange(`cca:notify-log:${ns}`, 0, 19);
       }
       return { content: [{ type: "text", text: JSON.stringify({ messages, total: messages.length, namespace: ns }) }] };
+    }
+
+    case "list_active_repos": {
+      logger.info("tool:list_active_repos");
+      const redis = getRedis();
+      if (!redis) return { content: [{ type: "text", text: "Redis unavailable" }] };
+
+      const keys = await redis.keys("cca:jobs:*");
+      const namespaces: Array<{
+        namespace: string;
+        total_jobs: number;
+        active_jobs: number;
+        recent_job_ids: string[];
+        last_activity: string | null;
+      }> = [];
+
+      for (const key of keys) {
+        if (key.includes(":index")) continue;
+        const ns = key.replace("cca:jobs:", "");
+        const jobIds = await redis.smembers(key);
+
+        const pipeline = redis.pipeline();
+        for (const id of jobIds) pipeline.get(`cca:job:${id}`);
+        const results = await pipeline.exec();
+
+        const jobs = (results ?? [])
+          .map(([err, raw]) => {
+            if (err || !raw) return null;
+            try { return JSON.parse(raw as string) as { id: string; status: string; startedAt?: string }; } catch { return null; }
+          })
+          .filter((j): j is { id: string; status: string; startedAt?: string } => j !== null);
+
+        const activeStatuses = new Set(["running", "cloning", "pending", "pending_approval"]);
+        const activeJobs = jobs.filter((j) => activeStatuses.has(j.status));
+        const lastJob = jobs.slice().sort(
+          (a, b) => new Date(b.startedAt ?? 0).getTime() - new Date(a.startedAt ?? 0).getTime()
+        )[0];
+
+        namespaces.push({
+          namespace: ns,
+          total_jobs: jobs.length,
+          active_jobs: activeJobs.length,
+          recent_job_ids: activeJobs.map((j) => j.id).slice(0, 5),
+          last_activity: lastJob?.startedAt ?? null,
+        });
+      }
+
+      namespaces.sort((a, b) => b.active_jobs - a.active_jobs);
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ namespaces }, null, 2),
+        }],
+      };
+    }
+
+    case "get_pubsub_status": {
+      logger.info("tool:get_pubsub_status");
+      const redis = getRedis();
+      if (!redis) return { content: [{ type: "text", text: "Redis unavailable" }] };
+
+      const channels = await redis.pubsub("CHANNELS", "cca:*") as string[];
+      const numsub = channels.length > 0
+        ? await redis.pubsub("NUMSUB", ...channels) as (string | number)[]
+        : [];
+
+      const channelCounts: Record<string, number> = {};
+      for (let i = 0; i < numsub.length; i += 2) {
+        channelCounts[numsub[i] as string] = Number(numsub[i + 1]);
+      }
+
+      const ns = getNamespace();
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            active_channels: channelCounts,
+            expected_channels: [
+              `cca:notify:${ns}`,
+              `cca:chat:incoming:${ns}`,
+              `cca:chat:outgoing:${ns}`,
+            ],
+          }, null, 2),
+        }],
+      };
     }
 
     default:

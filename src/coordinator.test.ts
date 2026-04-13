@@ -150,10 +150,8 @@ describe("Coordinator", () => {
 
     expect(mockRedisPublish).toHaveBeenCalledWith(
       "cca:notify:test-ns",
-      expect.stringContaining("failed"),
+      "❌ My Job\nhttps://github.com/test/repo",
     );
-    const call = mockRedisPublish.mock.calls.find((c) => c[0] === "cca:notify:test-ns");
-    expect(call?.[1]).toContain("My Job");
   });
 
   // Test 4: Coordinator survives Redis error and continues processing
@@ -208,23 +206,23 @@ describe("Coordinator", () => {
     // Job "b" was failed → notification
     expect(mockRedisPublish).toHaveBeenCalledWith(
       "cca:notify:test-ns",
-      expect.stringContaining("failed"),
+      expect.stringContaining("❌"),
     );
   });
 
-  // Done event always notifies with ✓ format
-  it("notifies ✓ done for a standard done event", async () => {
+  // Done event notifies with ✅ format (no score when undefined)
+  it("notifies ✅ done for a standard done event", async () => {
     const event = makeEvent({ status: "done", title: "My Task", repoUrl: "https://github.com/test/repo" });
     await coordinator.processEvent(event);
 
     expect(mockRedisPublish).toHaveBeenCalledWith(
       "cca:notify:test-ns",
-      "✓ My Task done\nhttps://github.com/test/repo",
+      "✅ My Task\nhttps://github.com/test/repo",
     );
   });
 
-  // Done event with coordinatorPlan still notifies ✓ done (and spawns next)
-  it("notifies ✓ done even when coordinatorPlan fires", async () => {
+  // Done event with coordinatorPlan still notifies ✅ done (and spawns next)
+  it("notifies ✅ done even when coordinatorPlan fires", async () => {
     const event = makeEvent({
       status: "done",
       title: "Parent Task",
@@ -236,29 +234,29 @@ describe("Coordinator", () => {
     expect(manager.spawn).toHaveBeenCalled();
     expect(mockRedisPublish).toHaveBeenCalledWith(
       "cca:notify:test-ns",
-      "✓ Parent Task done\nhttps://github.com/test/repo",
+      "✅ Parent Task\nhttps://github.com/test/repo",
     );
   });
 
-  // Low score triggers notification
-  it("publishes low-score notification when score < 0.5 on done event", async () => {
-    const event = makeEvent({ status: "done", score: 0.3, title: "Low scorer" });
+  // Score is included in notification message
+  it("includes score in notification when score is present on done event", async () => {
+    const event = makeEvent({ status: "done", score: 0.3, title: "Low scorer", repoUrl: "https://github.com/test/repo" });
     await coordinator.processEvent(event);
 
     expect(mockRedisPublish).toHaveBeenCalledWith(
       "cca:notify:test-ns",
-      expect.stringContaining("low score"),
+      "✅ Low scorer (score: 0.30)\nhttps://github.com/test/repo",
     );
   });
 
-  // All done jobs now notify
-  it("publishes done notification for high-score done event", async () => {
+  // All done jobs notify with score embedded
+  it("publishes done notification with score for high-score done event", async () => {
     const event = makeEvent({ status: "done", score: 0.8, title: "Great Job", repoUrl: "https://github.com/test/repo" });
     await coordinator.processEvent(event);
 
     expect(mockRedisPublish).toHaveBeenCalledWith(
       "cca:notify:test-ns",
-      "✓ Great Job done\nhttps://github.com/test/repo",
+      "✅ Great Job (score: 0.80)\nhttps://github.com/test/repo",
     );
   });
 });
