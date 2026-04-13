@@ -24,6 +24,7 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { JobManager, repoKey, normalizeRepoUrl } from "./agent.js";
+import { MetaAgentManager } from "./meta-agent.js";
 import { buildEvaluatorTask } from "./evaluator.js";
 import { loadProfiles, upsertProfile, deleteProfile, getProfile, interpolate } from "./profiles.js";
 import { planStore, jobStore, learningsStore } from "./store.js";
@@ -73,6 +74,7 @@ const manager = new JobManager(token);
 const namespace = getNamespace();
 const coordinator = new Coordinator(manager, namespace);
 const cronEngine = new CronEngine(manager, namespace);
+const metaAgentManager = new MetaAgentManager();
 
 const server = new Server(
   { name: "cc-agent", version: PKG_VERSION },
@@ -618,6 +620,52 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       name: "get_pubsub_status",
       description: "Debug: show all active Redis pub/sub channels and subscriber counts. Use to diagnose chat sync issues.",
       inputSchema: { type: "object", properties: {}, required: [] },
+    },
+    {
+      name: "start_meta_agent",
+      description: "Clone repo (if needed) into ~/cc-agent-workspace/{namespace} and start a persistent Claude Code session there. Meta-agents are long-lived — they receive multiple messages over time and publish responses to cca:chat:outgoing:{namespace}.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          namespace: {
+            type: "string",
+            description: "Repo short name, e.g. polly-gamba. Used as the workspace directory name and Redis key prefix.",
+          },
+          repo_url: {
+            type: "string",
+            description: "Optional GitHub URL. Defaults to https://github.com/gonzih/{namespace}",
+          },
+        },
+        required: ["namespace"],
+      },
+    },
+    {
+      name: "message_meta_agent",
+      description: "Send a message to a running meta-agent session. Enqueues to cca:meta:{namespace}:input (LPUSH). The meta-agent polls this every 3s and writes messages to Claude stdin.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          namespace: { type: "string", description: "Meta-agent namespace to message" },
+          message: { type: "string", description: "Message content to send to the Claude session" },
+        },
+        required: ["namespace", "message"],
+      },
+    },
+    {
+      name: "list_meta_agents",
+      description: "List all meta-agent sessions and their status (running or stopped).",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "stop_meta_agent",
+      description: "Stop a running meta-agent session. Kills the Claude process and updates Redis status to stopped.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          namespace: { type: "string", description: "Meta-agent namespace to stop" },
+        },
+        required: ["namespace"],
+      },
     },
   ],
 }));
@@ -1414,6 +1462,82 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           }, null, 2),
         }],
       };
+    }
+
+    case "start_meta_agent": {
+      logger.info("tool:start_meta_agent", { namespace: a.namespace });
+      const ns = a.namespace as string;
+      const repoUrl = a.repo_url as string | undefined;
+      try {
+        const info = await metaAgentManager.startMetaAgent(ns, repoUrl);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ ok: true, ...info, message: `Meta-agent started. Responses published to cca:chat:outgoing:${ns}.` }),
+          }],
+        };
+      } catch (err) {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ ok: false, error: String(err) }),
+          }],
+        };
+      }
+    }
+
+    case "message_meta_agent": {
+      logger.info("tool:message_meta_agent", { namespace: a.namespace });
+      const ns = a.namespace as string;
+      const message = a.message as string;
+      try {
+        await metaAgentManager.messageMetaAgent(ns, message);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ ok: true, namespace: ns, message: "Message queued for delivery to meta-agent." }),
+          }],
+        };
+      } catch (err) {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ ok: false, error: String(err) }),
+          }],
+        };
+      }
+    }
+
+    case "list_meta_agents": {
+      logger.info("tool:list_meta_agents");
+      const agents = await metaAgentManager.listMetaAgents();
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ agents, total: agents.length }),
+        }],
+      };
+    }
+
+    case "stop_meta_agent": {
+      logger.info("tool:stop_meta_agent", { namespace: a.namespace });
+      const ns = a.namespace as string;
+      try {
+        await metaAgentManager.stopMetaAgent(ns);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ ok: true, namespace: ns, message: "Meta-agent stopped." }),
+          }],
+        };
+      } catch (err) {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ ok: false, error: String(err) }),
+          }],
+        };
+      }
     }
 
     default:
