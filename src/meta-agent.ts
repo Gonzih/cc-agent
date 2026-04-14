@@ -88,6 +88,20 @@ export class MetaAgentManager {
     const priorState = await this.getState(namespace);
     const claudeArgs = priorState ? ["--continue"] : [];
 
+    // Kill any orphaned process from before a cc-agent restart.
+    // this.processes is in-memory only, so after a restart it's empty even if
+    // a Claude child process from the prior run is still alive.
+    if (priorState?.pid) {
+      try {
+        process.kill(priorState.pid, 0); // throws ESRCH if process is not running
+        // Still alive — kill it to avoid orphan leak before we spawn fresh.
+        try { process.kill(priorState.pid); } catch { /* race: already died */ }
+        logger.info("meta-agent:killed-orphan", { namespace, pid: priorState.pid });
+      } catch {
+        // Process is not running — nothing to clean up.
+      }
+    }
+
     const proc = spawn("claude", claudeArgs, {
       cwd,
       stdio: ["pipe", "pipe", "pipe"],
@@ -198,7 +212,13 @@ export class MetaAgentManager {
       timestamp: new Date().toISOString(),
     });
     await redis.lpush(this.inputKey(namespace), entry);
-    await redis.hset(this.metaKey(namespace), "lastMessageAt", new Date().toISOString());
+    // Use read-modify-write instead of hset: metaKey is a STRING key (stored by saveState),
+    // so calling hset on it would throw ReplyError: WRONGTYPE.
+    const currentState = await this.getState(namespace);
+    if (currentState) {
+      currentState.lastMessageAt = new Date().toISOString();
+      await this.saveState(currentState);
+    }
     // Bump live status
     const ls = this.liveStatus.get(namespace);
     if (ls) {

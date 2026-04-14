@@ -187,14 +187,35 @@ describe("MetaAgentManager", () => {
       expect(entry.content).toBe("do a thing");
     });
 
-    it("updates lastMessageAt in Redis", async () => {
+    it("saves lastMessageAt via set (not hset) to avoid WRONGTYPE error", async () => {
+      // metaKey is a STRING key (saveState uses redis.set), so hset would throw WRONGTYPE.
+      // The fix reads the state, updates lastMessageAt, and writes back via saveState.
+      const priorState = {
+        namespace: "my-repo",
+        repoUrl: "https://github.com/gonzih/my-repo",
+        cwd: "/home/user/cc-agent-workspace/my-repo",
+        status: "running",
+        startedAt: "2026-01-01T00:00:00.000Z",
+      };
+      mockExistsSync.mockReturnValue(true);
+      mockRedisGet.mockResolvedValue(JSON.stringify(priorState));
+
       await manager.messageMetaAgent("my-repo", "test message");
 
-      expect(mockRedisHset).toHaveBeenCalledWith(
-        "cca:meta:my-repo",
-        "lastMessageAt",
-        expect.any(String)
+      // hset must NOT be called — it would cause a WRONGTYPE Redis error
+      expect(mockRedisHset).not.toHaveBeenCalled();
+      // State should be written via set with lastMessageAt populated.
+      // Use the LAST matching call: startMetaAgent writes state first (no lastMessageAt),
+      // then messageMetaAgent writes again with lastMessageAt set.
+      const setCalls = mockRedisSet.mock.calls.filter(
+        (c) => (c[0] as string) === "cca:meta:my-repo"
       );
+      const lastSetCall = setCalls[setCalls.length - 1];
+      expect(lastSetCall).toBeDefined();
+      if (lastSetCall) {
+        const saved = JSON.parse(lastSetCall[1] as string) as { lastMessageAt?: string };
+        expect(saved.lastMessageAt).toMatch(/^\d{4}-/);
+      }
     });
 
     it("throws when Redis is unavailable", async () => {
@@ -362,6 +383,52 @@ describe("MetaAgentManager", () => {
       expect(mockRedisSadd).toHaveBeenCalledWith("cca:meta:agents:index", "my-repo");
       expect(info.namespace).toBe("my-repo");
       expect(info.status).toBe("running");
+    });
+
+    it("kills orphaned process from prior session when in-memory map is empty", async () => {
+      // Simulates cc-agent restart: this.processes is empty but a prior pid exists in Redis.
+      mockExistsSync.mockReturnValue(true);
+      const priorState = {
+        namespace: "my-repo",
+        repoUrl: "https://github.com/gonzih/my-repo",
+        cwd: "/home/user/cc-agent-workspace/my-repo",
+        status: "running",
+        pid: 12345,
+        startedAt: "2026-01-01T00:00:00.000Z",
+      };
+      mockRedisGet.mockResolvedValue(JSON.stringify(priorState));
+
+      // process.kill(pid, 0) succeeds → process is alive
+      const killSpy = vi.spyOn(process, "kill").mockImplementation((_pid: number, _sig?: any) => true);
+
+      await manager.startMetaAgent("my-repo");
+
+      // Should have probed with signal 0 then killed the orphan
+      expect(killSpy).toHaveBeenCalledWith(12345, 0);
+      expect(killSpy).toHaveBeenCalledWith(12345);
+
+      killSpy.mockRestore();
+    });
+
+    it("does not call process.kill when prior state has no PID", async () => {
+      mockExistsSync.mockReturnValue(true);
+      const priorState = {
+        namespace: "my-repo",
+        repoUrl: "https://github.com/gonzih/my-repo",
+        cwd: "/home/user/cc-agent-workspace/my-repo",
+        status: "stopped",
+        // no pid field
+        startedAt: "2026-01-01T00:00:00.000Z",
+      };
+      mockRedisGet.mockResolvedValue(JSON.stringify(priorState));
+
+      const killSpy = vi.spyOn(process, "kill").mockImplementation((_pid: number, _sig?: any) => true);
+
+      await manager.startMetaAgent("my-repo");
+
+      expect(killSpy).not.toHaveBeenCalled();
+
+      killSpy.mockRestore();
     });
 
     it("returns existing state when agent is already running", async () => {

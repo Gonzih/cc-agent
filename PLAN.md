@@ -1,33 +1,31 @@
-# Plan: Fix start_meta_agent crash on first-time start
+# Plan: Fix WRONGTYPE Redis error and orphaned process on restart
 
 ## Task Restatement
-`startMetaAgent` always passes `--continue` to Claude, which requires a prior deferred session.
-On first start for a namespace, there is no prior session, so Claude immediately exits with:
-"Error: No deferred tool marker found in the resumed session."
+Fix two bugs in `src/meta-agent.ts`:
 
-Fix: check if a prior session exists (via Redis state lookup) before deciding which args to pass.
+1. **Bug 1**: `messageMetaAgent` calls `redis.hset(metaKey(namespace), ...)` but `metaKey(namespace)` is stored as a STRING by `saveState`. Redis throws `WRONGTYPE` when mixing hash ops on a string key.
+
+2. **Bug 2**: After cc-agent restarts, `this.processes` (in-memory Map) is empty. `startMetaAgent` sees no tracked process and spawns a new Claude process, leaving the prior one as an orphan.
 
 ## Approach
 
-### Chosen: Redis state heuristic
-- Before spawning Claude, call `getState(namespace)` to check if a prior session record exists in Redis
-- If state exists (namespace was started before) → pass `["--continue"]`
-- If state is null (first time) → pass `[]` (no --continue), and write an initial system prompt to stdin
-- **Pros:** Uses existing Redis infrastructure, no new deps, minimal code change
-- **Cons:** If Redis is wiped, treated as first-time (acceptable — Claude starts fresh)
+### Bug 1: Replace hset with read-modify-write via getState/saveState
+- Remove the `hset` call entirely
+- Read current state with `getState(namespace)`, set `lastMessageAt`, write back with `saveState`
+- **Pros**: Consistent with the existing string-key pattern; no type mismatch
+- **Cons**: One extra Redis GET per message (acceptable)
 
-### Rejected: filesystem session file check
-- Claude stores sessions in ~/.claude/projects/{hash}/ — hash computation is complex
-- Fragile if Claude changes its storage location
-
-### Rejected: explicit flag in Redis metadata
-- Would require storing a separate "session-initialized" key
-- The existing state record already serves as that signal
+### Bug 2: Kill orphaned process before spawning
+- After `getState` in `startMetaAgent`, check if `priorState.pid` is alive via `process.kill(pid, 0)`
+- If alive (no throw): kill it with `process.kill(pid)` to avoid leak, then spawn fresh
+- If dead (throws ESRCH): proceed to spawn fresh as normal
+- **Pros**: Minimal change, no complex re-adoption logic, prevents leak
+- **Cons**: Prior process output is lost (acceptable; it was orphaned anyway)
 
 ## Files to Touch
-- `src/meta-agent.ts` — conditional `--continue` logic + initial stdin prompt
-- `src/meta-agent.test.ts` — update existing test, add new test cases
+- `src/meta-agent.ts` — apply both fixes
+- `src/meta-agent.test.ts` — update hset test; add orphan-kill tests
 
 ## Risks
-- `getState()` is called twice if already-running branch is taken (acceptable, it's a Redis GET)
-- Initial stdin prompt format may not match what Claude expects — kept minimal and safe
+- `process.kill(pid, 0)` may throw for non-ESRCH reasons (EPERM) — catch all errors to be safe
+- Test uses `vi.spyOn(process, 'kill')` — must restore spy after each test
