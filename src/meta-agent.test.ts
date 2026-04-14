@@ -252,18 +252,69 @@ describe("MetaAgentManager", () => {
   });
 
   describe("startMetaAgent", () => {
-    it("spawns claude --continue in workspace directory", async () => {
+    it("spawns claude without --continue when no prior session exists", async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockRedisGet.mockResolvedValue(null); // no prior state → first-time start
+
+      await manager.startMetaAgent("my-repo");
+
+      expect(mockSpawn).toHaveBeenCalledWith(
+        "claude",
+        [], // no --continue on fresh start
+        expect.objectContaining({
+          cwd: expect.stringContaining("cc-agent-workspace/my-repo"),
+        })
+      );
+    });
+
+    it("writes initial system prompt to stdin when starting fresh", async () => {
       mockExistsSync.mockReturnValue(true);
       mockRedisGet.mockResolvedValue(null);
+
+      await manager.startMetaAgent("my-repo");
+
+      const proc = mockSpawn.mock.results[0].value;
+      expect(proc.stdin.write).toHaveBeenCalledWith(
+        expect.stringContaining("persistent meta-agent")
+      );
+    });
+
+    it("spawns claude with --continue when prior session exists", async () => {
+      mockExistsSync.mockReturnValue(true);
+      const priorState = {
+        namespace: "my-repo",
+        repoUrl: "https://github.com/gonzih/my-repo",
+        cwd: "/home/user/cc-agent-workspace/my-repo",
+        status: "stopped",
+        startedAt: "2026-01-01T00:00:00.000Z",
+      };
+      mockRedisGet.mockResolvedValue(JSON.stringify(priorState));
 
       await manager.startMetaAgent("my-repo");
 
       expect(mockSpawn).toHaveBeenCalledWith(
         "claude",
         ["--continue"],
-        expect.objectContaining({
-          cwd: expect.stringContaining("cc-agent-workspace/my-repo"),
-        })
+        expect.any(Object)
+      );
+    });
+
+    it("does not write initial prompt when resuming a prior session", async () => {
+      mockExistsSync.mockReturnValue(true);
+      const priorState = {
+        namespace: "my-repo",
+        repoUrl: "https://github.com/gonzih/my-repo",
+        cwd: "/home/user/cc-agent-workspace/my-repo",
+        status: "stopped",
+        startedAt: "2026-01-01T00:00:00.000Z",
+      };
+      mockRedisGet.mockResolvedValue(JSON.stringify(priorState));
+
+      await manager.startMetaAgent("my-repo");
+
+      const proc = mockSpawn.mock.results[0].value;
+      expect(proc.stdin.write).not.toHaveBeenCalledWith(
+        expect.stringContaining("persistent meta-agent")
       );
     });
 

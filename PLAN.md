@@ -1,42 +1,33 @@
-# Plan: Per-Repo Meta-Agent Sessions
+# Plan: Fix start_meta_agent crash on first-time start
 
 ## Task Restatement
-Add persistent, long-lived Claude Code sessions (meta-agents) to cc-agent, one per repo namespace.
-Exposed as 4 new MCP tools: start_meta_agent, message_meta_agent, list_meta_agents, stop_meta_agent.
+`startMetaAgent` always passes `--continue` to Claude, which requires a prior deferred session.
+On first start for a namespace, there is no prior session, so Claude immediately exits with:
+"Error: No deferred tool marker found in the resumed session."
 
-## Approaches Considered
+Fix: check if a prior session exists (via Redis state lookup) before deciding which args to pass.
 
-### A) In-process spawning with Redis I/O (chosen)
-Spawn `claude --continue` as a child process in `~/cc-agent-workspace/{namespace}`. Poll
-`cca:meta:{namespace}:input` every 3s → write to stdin. Read stdout line-by-line → publish to
-`cca:chat:outgoing:{namespace}` via redis.publish.
-**Pros:** Mirrors existing job input poller pattern exactly, leverages existing Redis infra, no new deps.
-**Cons:** Process lifetime tied to cc-agent process.
+## Approach
 
-### B) systemd/launchd-managed processes
-**Cons:** Requires OS-level setup, not portable.
+### Chosen: Redis state heuristic
+- Before spawning Claude, call `getState(namespace)` to check if a prior session record exists in Redis
+- If state exists (namespace was started before) → pass `["--continue"]`
+- If state is null (first time) → pass `[]` (no --continue), and write an initial system prompt to stdin
+- **Pros:** Uses existing Redis infrastructure, no new deps, minimal code change
+- **Cons:** If Redis is wiped, treated as first-time (acceptable — Claude starts fresh)
 
-### C) tmux/screen sessions
-**Cons:** Requires tmux installed, harder to capture output programmatically.
+### Rejected: filesystem session file check
+- Claude stores sessions in ~/.claude/projects/{hash}/ — hash computation is complex
+- Fragile if Claude changes its storage location
 
-## Chosen: Approach A
+### Rejected: explicit flag in Redis metadata
+- Would require storing a separate "session-initialized" key
+- The existing state record already serves as that signal
 
 ## Files to Touch
-- `src/meta-agent.ts` — NEW: MetaAgentManager class
-- `src/index.ts` — Add 4 tool definitions + handler cases, import MetaAgentManager
-
-## Implementation Details
-- `MetaAgentManager` maintains `Map<string, ChildProcess>` for live processes
-- Redis state: `cca:meta:{namespace}` → JSON with { namespace, repoUrl, cwd, pid, status, startedAt, lastMessageAt }
-- Index: `cca:meta:agents:index` Redis set (similar to `cca:jobs:index`) — avoids fragile key scanning
-- Input: `cca:meta:{namespace}:input` list (LPUSH enqueue, RPOP consume), polled every 3s
-- Output: each stdout line published to Redis channel `cca:chat:outgoing:{namespace}`
-- `ensureWorkspace`: `~/cc-agent-workspace/{namespace}`, clone via `gh repo clone` if missing
-- `startMetaAgent`: spawn `claude --continue`, set up pollers, update Redis
-- `messageMetaAgent`: LPUSH to input queue, update lastMessageAt
-- `listMetaAgents`: smembers on index set, fetch each JSON state
-- `stopMetaAgent`: kill process, update Redis status to stopped
+- `src/meta-agent.ts` — conditional `--continue` logic + initial stdin prompt
+- `src/meta-agent.test.ts` — update existing test, add new test cases
 
 ## Risks
-- `claude --continue` may behave differently with stdin injection than fresh sessions
-- Need to handle process already running (idempotent start)
+- `getState()` is called twice if already-running branch is taken (acceptable, it's a Redis GET)
+- Initial stdin prompt format may not match what Claude expects — kept minimal and safe
