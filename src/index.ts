@@ -653,7 +653,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "list_meta_agents",
-      description: "List all meta-agent sessions and their status (running or stopped).",
+      description: "List all meta-agent sessions and their status. Returns namespace, repoUrl, cwd, pid, status, startedAt, lastActivity, currentTool, isTyping, lastMessage, turnCount. Live status is also written to Redis cca:meta-agent:status:{namespace}.",
       inputSchema: { type: "object", properties: {} },
     },
     {
