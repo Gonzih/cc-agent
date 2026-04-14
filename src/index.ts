@@ -1563,6 +1563,7 @@ if (redis) {
 await manager.init();
 await coordinator.start();
 await cronEngine.start();
+metaAgentManager.startPoller();
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
