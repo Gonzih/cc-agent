@@ -24,8 +24,8 @@ const {
   const mockRedisSmembers = vi.fn(async () => [] as string[]);
   const mockRedisPublish = vi.fn(async () => 0);
   const mockRedisRpop = vi.fn(async () => null as string | null);
-  const mockRedisLPush = vi.fn(async () => 1);
-  const mockRedisLTrim = vi.fn(async () => "OK");
+  const mockRedisLPush = vi.fn(async () => 1);  // ioredis: lpush
+  const mockRedisLTrim = vi.fn(async () => "OK");  // ioredis: ltrim
 
   const mockRedis = {
     get: mockRedisGet,
@@ -34,8 +34,8 @@ const {
     smembers: mockRedisSmembers,
     publish: mockRedisPublish,
     rpop: mockRedisRpop,
-    lPush: mockRedisLPush,
-    lTrim: mockRedisLTrim,
+    lpush: mockRedisLPush,
+    ltrim: mockRedisLTrim,
   };
 
   const mockGetRedis = vi.fn(() => mockRedis as typeof mockRedis | null);
@@ -111,8 +111,8 @@ function resetRedisMock() {
     smembers: mockRedisSmembers,
     publish: mockRedisPublish,
     rpop: mockRedisRpop,
-    lPush: mockRedisLPush,
-    lTrim: mockRedisLTrim,
+    lpush: mockRedisLPush,
+    ltrim: mockRedisLTrim,
   };
   mockGetRedis.mockReturnValue(redisMock);
   return redisMock;
@@ -613,6 +613,7 @@ describe("MetaAgentManager", () => {
         expect.stringContaining("Hello from Claude")
       );
       expect(mockRedisLTrim).toHaveBeenCalledWith("cca:chat:log:my-repo", 0, 499);
+      // (ioredis uses lowercase: lpush/ltrim — verified by mock key names above)
     });
 
     it("persists message as JSON with role assistant", async () => {

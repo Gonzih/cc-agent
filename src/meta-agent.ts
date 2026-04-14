@@ -370,8 +370,8 @@ export class MetaAgentManager {
     });
     try {
       await redis.publish(this.outChannel(namespace), message);
-      await redis.lPush(this.logKey(namespace), message);
-      await redis.lTrim(this.logKey(namespace), 0, CHAT_LOG_MAX);
+      await redis.lpush(this.logKey(namespace), message);
+      await redis.ltrim(this.logKey(namespace), 0, CHAT_LOG_MAX);
     } catch (err) {
       logger.warn("meta-agent:publish-failed", { namespace, err: String(err) });
     }
