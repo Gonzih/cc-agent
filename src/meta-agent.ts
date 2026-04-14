@@ -98,6 +98,18 @@ export class MetaAgentManager {
         } catch {
           content = raw;
         }
+        // Log the incoming coordinator message to the chat log so the UI can
+        // render it as a user bubble alongside Claude's assistant responses.
+        const coordinatorEntry = JSON.stringify({
+          id: randomUUID(),
+          role: "user",
+          source: "coordinator",
+          namespace: ns,
+          content,
+          timestamp: new Date().toISOString(),
+        });
+        redis.lpush(this.logKey(ns), coordinatorEntry).catch(() => {});
+        redis.ltrim(this.logKey(ns), 0, CHAT_LOG_MAX).catch(() => {});
         this.messageMetaAgent(ns, content).catch((err) => {
           logger.warn("meta-agent:poller-message-failed", { namespace: ns, err: String(err) });
         });

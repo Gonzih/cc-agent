@@ -1,11 +1,11 @@
-# TODO — meta-agent per-message claude -p fix
+# TODO — log coordinator inputs to chat log
 
 - [x] Write PLAN.md and TODO.md
-- [ ] Create feature branch fix/meta-agent-per-message-spawn
-- [ ] Rewrite src/meta-agent.ts: remove processes/pollers, add per-message spawn in messageMetaAgent
-- [ ] Rewrite src/meta-agent.test.ts: add readdirSync mock, update/replace tests for new behavior
-- [ ] Update src/index.ts: change "Message queued" to "Message delivered" in message_meta_agent handler
-- [ ] Run npm install && npm test — fix any failures
+- [ ] Create feature branch fix/log-coordinator-inputs
+- [ ] Edit pollInputQueues in src/meta-agent.ts to lpush coordinator input to chat log
+- [ ] Add test in src/meta-agent.test.ts verifying coordinator input is logged
+- [ ] npm install && npm test — fix any failures
 - [ ] Commit and push
 - [ ] gh pr create + gh pr merge --squash --auto
 - [ ] npm version patch && npm publish --access public
+- [ ] redis-cli notify
