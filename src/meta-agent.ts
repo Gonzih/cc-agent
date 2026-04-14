@@ -140,6 +140,11 @@ export class MetaAgentManager {
   async messageMetaAgent(namespace: string, message: string): Promise<void> {
     const redis = getRedis();
     if (!redis) throw new Error("Redis not available");
+    // Auto-start if no running process for this namespace
+    const proc = this.processes.get(namespace);
+    if (!proc || proc.killed) {
+      await this.startMetaAgent(namespace);
+    }
     const entry = JSON.stringify({
       id: randomUUID(),
       content: message,

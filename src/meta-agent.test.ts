@@ -204,6 +204,35 @@ describe("MetaAgentManager", () => {
         "Redis not available"
       );
     });
+
+    it("auto-starts the agent if not running before enqueuing", async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockRedisGet.mockResolvedValue(null);
+
+      // No prior startMetaAgent call — no running process in the map
+      await manager.messageMetaAgent("my-repo", "hello agent");
+
+      // Should have spawned a new process
+      expect(mockSpawn).toHaveBeenCalledWith("claude", ["--continue"], expect.any(Object));
+      // And still enqueued the message
+      expect(mockRedisLpush).toHaveBeenCalledWith(
+        "cca:meta:my-repo:input",
+        expect.any(String)
+      );
+    });
+
+    it("does not re-start if agent is already running", async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockRedisGet.mockResolvedValue(null);
+
+      // Start once explicitly
+      await manager.startMetaAgent("my-repo");
+      const spawnCount = mockSpawn.mock.calls.length;
+
+      // Message should not trigger another spawn
+      await manager.messageMetaAgent("my-repo", "second message");
+      expect(mockSpawn.mock.calls.length).toBe(spawnCount);
+    });
   });
 
   describe("listMetaAgents", () => {
