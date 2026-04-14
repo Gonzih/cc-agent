@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "child_process";
-import { existsSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync, readdirSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 import { execSync } from "child_process";
@@ -9,7 +9,6 @@ import { logger } from "./logger.js";
 
 const META_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
 const META_AGENTS_INDEX = "cca:meta:agents:index";
-const INPUT_POLL_INTERVAL_MS = 3000;
 const STATUS_REDIS_TTL = 7 * 24 * 60 * 60; // 7 days
 
 export interface MetaAgentInfo {
@@ -17,7 +16,7 @@ export interface MetaAgentInfo {
   repoUrl: string;
   cwd: string;
   pid?: number;
-  status: "running" | "stopped";
+  status: "running" | "idle";
   startedAt: string;
   lastMessageAt?: string;
   // Live status fields
@@ -38,8 +37,8 @@ interface LiveStatus {
 }
 
 export class MetaAgentManager {
-  private processes = new Map<string, ChildProcess>();
-  private pollers = new Map<string, ReturnType<typeof setInterval>>();
+  // Tracks in-flight per-message claude processes (one per namespace at most).
+  private activeProcesses = new Map<string, ChildProcess>();
   private liveStatus = new Map<string, LiveStatus>();
 
   private metaKey(namespace: string): string {
@@ -48,10 +47,6 @@ export class MetaAgentManager {
 
   private statusKey(namespace: string): string {
     return `cca:meta-agent:status:${namespace}`;
-  }
-
-  private inputKey(namespace: string): string {
-    return `cca:meta:${namespace}:input`;
   }
 
   private outChannel(namespace: string): string {
@@ -69,75 +64,106 @@ export class MetaAgentManager {
     return cwd;
   }
 
-  async startMetaAgent(namespace: string, repoUrl?: string): Promise<MetaAgentInfo> {
-    // If already running, return current state
-    const existing = this.processes.get(namespace);
-    if (existing && !existing.killed) {
-      const state = await this.getState(namespace);
-      if (state) return state;
+  /**
+   * Check if a prior Claude session file exists for the given workspace CWD.
+   * Claude stores sessions at ~/.claude/projects/<encoded-path>/ where
+   * encoded-path is the CWD with '/' replaced by '-'.
+   */
+  private hasExistingSession(cwd: string): boolean {
+    const encodedPath = cwd.replace(/\//g, "-");
+    const sessionDir = join(homedir(), ".claude", "projects", encodedPath);
+    if (!existsSync(sessionDir)) return false;
+    try {
+      const files = readdirSync(sessionDir);
+      return files.some((f) => f.endsWith(".jsonl"));
+    } catch {
+      return false;
     }
+  }
+
+  /**
+   * Ensure the workspace and initial state exist for a namespace.
+   * Does NOT spawn a process — agents are stateless between messages.
+   */
+  async startMetaAgent(namespace: string, repoUrl?: string): Promise<MetaAgentInfo> {
+    // If state already exists, return it as-is.
+    const existingState = await this.getState(namespace);
+    if (existingState) return existingState;
 
     const cwd = await this.ensureWorkspace(namespace, repoUrl);
     const effectiveRepoUrl = repoUrl ?? `https://github.com/gonzih/${namespace}`;
 
-    const startedAt = new Date().toISOString();
-
-    // Only pass --continue if a prior session exists for this namespace.
-    // On first start, getState returns null → spawn fresh to avoid the
-    // "No deferred tool marker found" crash.
-    const priorState = await this.getState(namespace);
-    const claudeArgs = priorState ? ["--continue"] : [];
-
-    // Kill any orphaned process from before a cc-agent restart.
-    // this.processes is in-memory only, so after a restart it's empty even if
-    // a Claude child process from the prior run is still alive.
-    if (priorState?.pid) {
-      try {
-        process.kill(priorState.pid, 0); // throws ESRCH if process is not running
-        // Still alive — kill it to avoid orphan leak before we spawn fresh.
-        try { process.kill(priorState.pid); } catch { /* race: already died */ }
-        logger.info("meta-agent:killed-orphan", { namespace, pid: priorState.pid });
-      } catch {
-        // Process is not running — nothing to clean up.
-      }
-    }
-
-    const proc = spawn("claude", claudeArgs, {
+    const state: MetaAgentInfo = {
+      namespace,
+      repoUrl: effectiveRepoUrl,
       cwd,
-      stdio: ["pipe", "pipe", "pipe"],
-      detached: false,
-      env: process.env,
-    });
+      status: "idle",
+      startedAt: new Date().toISOString(),
+    };
 
-    // Give the fresh session an initial system message so Claude waits for input.
-    if (!priorState) {
-      proc.stdin?.write(
-        `You are a persistent meta-agent for the ${namespace} repository. Wait for incoming messages and act on them.\n`
-      );
-    }
+    await this.saveState(state);
 
-    this.processes.set(namespace, proc);
-
-    // Initialize live status for this namespace
     this.liveStatus.set(namespace, {
       isTyping: false,
       turnCount: 0,
       lastActivity: new Date().toISOString(),
     });
 
-    const state: MetaAgentInfo = {
-      namespace,
-      repoUrl: effectiveRepoUrl,
-      cwd,
-      pid: proc.pid,
-      status: "running",
-      startedAt,
-    };
+    logger.info("meta-agent:started", { namespace, cwd });
+    return state;
+  }
 
+  /**
+   * Deliver a message to a meta-agent by spawning `claude -p <message>`.
+   * Uses `--continue` if a prior session file exists in the workspace.
+   * Stdout is published line-by-line to cca:chat:outgoing:{namespace}.
+   */
+  async messageMetaAgent(namespace: string, message: string, repoUrl?: string): Promise<void> {
+    const redis = getRedis();
+    if (!redis) throw new Error("Redis not available");
+
+    // Ensure workspace and state exist.
+    let state = await this.getState(namespace);
+    if (!state) {
+      state = await this.startMetaAgent(namespace, repoUrl);
+    }
+
+    const cwd = state.cwd;
+    const sessionExists = this.hasExistingSession(cwd);
+    const claudeArgs = sessionExists
+      ? ["--continue", "-p", message, "--dangerously-skip-permissions"]
+      : ["-p", message, "--dangerously-skip-permissions"];
+
+    // Update lastMessageAt and mark running.
+    state.lastMessageAt = new Date().toISOString();
+    state.status = "running";
     await this.saveState(state);
 
-    // Publish stdout lines to cca:chat:outgoing:{namespace}
-    // Parse lines for live status signals from Claude's output format.
+    // Update live status.
+    let ls = this.liveStatus.get(namespace);
+    if (!ls) {
+      ls = { isTyping: true, turnCount: 1, lastActivity: new Date().toISOString() };
+      this.liveStatus.set(namespace, ls);
+    } else {
+      ls.lastActivity = new Date().toISOString();
+      ls.isTyping = true;
+      ls.turnCount += 1;
+    }
+    this.writeLiveStatus(namespace).catch(() => {});
+
+    const proc = spawn("claude", claudeArgs, {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: false,
+      env: process.env,
+    });
+
+    this.activeProcesses.set(namespace, proc);
+
+    // Update pid in persisted state.
+    state.pid = proc.pid;
+    await this.saveState(state);
+
     proc.stdout?.setEncoding("utf-8");
     proc.stdout?.on("data", (chunk: string) => {
       const lines = chunk.split("\n");
@@ -153,81 +179,16 @@ export class MetaAgentManager {
       logger.warn("meta-agent:stderr", { namespace, chunk: chunk.slice(0, 200) });
     });
 
-    // Start input poller
-    const redis = getRedis();
-    if (redis) {
-      const poller = setInterval(async () => {
-        try {
-          if (!proc.stdin || proc.stdin.destroyed) return;
-          const raw = await redis.rpop(this.inputKey(namespace));
-          if (raw) {
-            let content: string;
-            try {
-              const parsed = JSON.parse(raw) as { id?: string; content?: string; timestamp?: string };
-              content = parsed.content ?? raw;
-            } catch {
-              content = raw;
-            }
-            proc.stdin.write(`\n<Human>\n${content}\n`);
-            logger.info("meta-agent:input-delivered", { namespace });
-          }
-        } catch {
-          // ignore polling errors
-        }
-      }, INPUT_POLL_INTERVAL_MS);
-      (poller as NodeJS.Timeout).unref();
-      this.pollers.set(namespace, poller);
-    }
-
     proc.on("close", (code) => {
-      logger.info("meta-agent:closed", { namespace, code });
-      const poller = this.pollers.get(namespace);
-      if (poller) {
-        clearInterval(poller);
-        this.pollers.delete(namespace);
-      }
-      this.processes.delete(namespace);
-      // Mark as not typing on close
+      logger.info("meta-agent:message-done", { namespace, code });
+      this.activeProcesses.delete(namespace);
       const ls = this.liveStatus.get(namespace);
       if (ls) { ls.isTyping = false; ls.currentTool = undefined; }
       this.writeLiveStatus(namespace).catch(() => {});
-      this.updateStatus(namespace, "stopped").catch(() => {});
+      this.updateStatus(namespace, "idle").catch(() => {});
     });
 
-    logger.info("meta-agent:started", { namespace, pid: proc.pid, cwd });
-    return state;
-  }
-
-  async messageMetaAgent(namespace: string, message: string, repoUrl?: string): Promise<void> {
-    const redis = getRedis();
-    if (!redis) throw new Error("Redis not available");
-    // Auto-start if no running process for this namespace
-    const proc = this.processes.get(namespace);
-    if (!proc || proc.killed) {
-      await this.startMetaAgent(namespace, repoUrl);
-    }
-    const entry = JSON.stringify({
-      id: randomUUID(),
-      content: message,
-      timestamp: new Date().toISOString(),
-    });
-    await redis.lpush(this.inputKey(namespace), entry);
-    // Use read-modify-write instead of hset: metaKey is a STRING key (stored by saveState),
-    // so calling hset on it would throw ReplyError: WRONGTYPE.
-    const currentState = await this.getState(namespace);
-    if (currentState) {
-      currentState.lastMessageAt = new Date().toISOString();
-      await this.saveState(currentState);
-    }
-    // Bump live status
-    const ls = this.liveStatus.get(namespace);
-    if (ls) {
-      ls.lastActivity = new Date().toISOString();
-      ls.turnCount += 1;
-      ls.isTyping = true;
-    }
-    this.writeLiveStatus(namespace).catch(() => {});
-    logger.info("meta-agent:message-queued", { namespace, length: message.length });
+    logger.info("meta-agent:message-spawned", { namespace, pid: proc.pid, sessionExists });
   }
 
   async listMetaAgents(): Promise<MetaAgentInfo[]> {
@@ -248,24 +209,17 @@ export class MetaAgentManager {
   }
 
   async stopMetaAgent(namespace: string): Promise<void> {
-    const poller = this.pollers.get(namespace);
-    if (poller) {
-      clearInterval(poller);
-      this.pollers.delete(namespace);
-    }
-
-    const proc = this.processes.get(namespace);
+    const proc = this.activeProcesses.get(namespace);
     if (proc && !proc.killed) {
       proc.kill();
-      this.processes.delete(namespace);
+      this.activeProcesses.delete(namespace);
     }
 
-    // Clear live status on stop
     const ls = this.liveStatus.get(namespace);
     if (ls) { ls.isTyping = false; ls.currentTool = undefined; }
     this.writeLiveStatus(namespace).catch(() => {});
 
-    await this.updateStatus(namespace, "stopped");
+    await this.updateStatus(namespace, "idle");
     logger.info("meta-agent:stopped", { namespace });
   }
 
@@ -333,7 +287,7 @@ export class MetaAgentManager {
       const state = await this.getState(namespace);
       const payload = {
         namespace,
-        status: state?.status ?? "stopped",
+        status: state?.status ?? "idle",
         pid: state?.pid,
         startedAt: state?.startedAt,
         lastActivity: ls.lastActivity,
@@ -386,7 +340,7 @@ export class MetaAgentManager {
       if (!raw) return null;
       const state = JSON.parse(raw) as MetaAgentInfo;
       // Reflect live process state
-      const proc = this.processes.get(namespace);
+      const proc = this.activeProcesses.get(namespace);
       if (proc && !proc.killed) {
         state.status = "running";
         state.pid = proc.pid;
@@ -406,7 +360,7 @@ export class MetaAgentManager {
     }
   }
 
-  private async updateStatus(namespace: string, status: "running" | "stopped"): Promise<void> {
+  private async updateStatus(namespace: string, status: "running" | "idle"): Promise<void> {
     const redis = getRedis();
     if (!redis) return;
     try {
@@ -414,7 +368,7 @@ export class MetaAgentManager {
       if (!raw) return;
       const state = JSON.parse(raw) as MetaAgentInfo;
       state.status = status;
-      if (status === "stopped") state.pid = undefined;
+      if (status === "idle") state.pid = undefined;
       await redis.set(this.metaKey(namespace), JSON.stringify(state), "EX", META_TTL_SECONDS);
     } catch (err) {
       logger.error("meta-agent:update-status-failed", { namespace, err: String(err) });

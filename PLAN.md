@@ -1,31 +1,59 @@
-# Plan: Fix WRONGTYPE Redis error and orphaned process on restart
+# Plan: Fix meta-agent Claude subprocess piped-stdin approach
 
 ## Task Restatement
-Fix two bugs in `src/meta-agent.ts`:
+The current `MetaAgentManager` spawns a persistent `claude` process with piped stdio,
+then polls a Redis input queue and writes messages to `proc.stdin`. This approach silently
+hangs at 0% CPU because `claude` with piped stdin produces zero output.
 
-1. **Bug 1**: `messageMetaAgent` calls `redis.hset(metaKey(namespace), ...)` but `metaKey(namespace)` is stored as a STRING by `saveState`. Redis throws `WRONGTYPE` when mixing hash ops on a string key.
+The fix: replace the persistent process model with **per-message `claude -p` invocations**
+so each call to `messageMetaAgent` spawns a fresh `claude -p <content>` that exits when done.
 
-2. **Bug 2**: After cc-agent restarts, `this.processes` (in-memory Map) is empty. `startMetaAgent` sees no tracked process and spawns a new Claude process, leaving the prior one as an orphan.
+## Approaches Considered
 
-## Approach
+### A: Per-message `claude -p` (chosen)
+- Spawn `claude [--continue] -p <message> --dangerously-skip-permissions` per message
+- Use `--continue` if a prior `.jsonl` session file exists in `~/.claude/projects/<encoded-cwd>/`
+- Capture stdout, publish to Redis when process exits
+- **Pros**: Matches how `claude` actually works; session continuity via `--continue`
+- **Cons**: Higher process overhead per message; no real-time streaming mid-message
 
-### Bug 1: Replace hset with read-modify-write via getState/saveState
-- Remove the `hset` call entirely
-- Read current state with `getState(namespace)`, set `lastMessageAt`, write back with `saveState`
-- **Pros**: Consistent with the existing string-key pattern; no type mismatch
-- **Cons**: One extra Redis GET per message (acceptable)
+### B: Interactive PTY
+- Spawn claude in a PTY so it thinks it has a terminal
+- **Cons**: Requires `node-pty` dependency; complex; fragile
 
-### Bug 2: Kill orphaned process before spawning
-- After `getState` in `startMetaAgent`, check if `priorState.pid` is alive via `process.kill(pid, 0)`
-- If alive (no throw): kill it with `process.kill(pid)` to avoid leak, then spawn fresh
-- If dead (throws ESRCH): proceed to spawn fresh as normal
-- **Pros**: Minimal change, no complex re-adoption logic, prevents leak
-- **Cons**: Prior process output is lost (acceptable; it was orphaned anyway)
+### C: Claude SDK / API
+- Use the Claude API directly instead of the CLI
+- **Cons**: Changes the auth model; requires API key plumbing; much larger refactor
+
+## Approach Chosen: A
 
 ## Files to Touch
-- `src/meta-agent.ts` — apply both fixes
-- `src/meta-agent.test.ts` — update hset test; add orphan-kill tests
+- `src/meta-agent.ts` — rewrite core spawning/polling logic
+- `src/meta-agent.test.ts` — update tests for new behavior
+
+## Key Changes
+
+### Remove
+- `this.processes` Map (persistent process tracking)
+- `this.pollers` Map (Redis input poller)
+- `INPUT_POLL_INTERVAL_MS` constant
+- `proc.stdin?.write(...)` initial message
+- `setInterval` input poller
+- `process.kill(priorState.pid, 0)` orphan detection
+
+### Add
+- `this.activeProcesses` Map — tracks in-flight per-message processes
+- `hasExistingSession(cwd)` — checks `~/.claude/projects/<encoded-cwd>/` for `.jsonl` files
+- Per-message spawn in `messageMetaAgent`
+
+### Status change
+- `"stopped"` → `"idle"` (agents persist between messages, they're just not actively spawning)
+- `MetaAgentInfo.status: "running" | "idle"` 
 
 ## Risks
-- `process.kill(pid, 0)` may throw for non-ESRCH reasons (EPERM) — catch all errors to be safe
-- Test uses `vi.spyOn(process, 'kill')` — must restore spy after each test
+- `--continue` requires at least one prior completed session. On very first message, no session
+  file exists → correct fallback to fresh `-p` invocation.
+- If `claude -p` exits non-zero, error is logged but not propagated to caller (fire-and-forget
+  spawning is intentional to match prior behavior).
+- Tests: many existing tests need rewriting since spawn is now in `messageMetaAgent`, not
+  `startMetaAgent`. `readdirSync` must be added to the fs mock.

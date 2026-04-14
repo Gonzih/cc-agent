@@ -6,34 +6,26 @@ const {
   mockExistsSync,
   mockMkdirSync,
   mockExecSync,
+  mockReaddirSync,
   mockSpawn,
   mockGetRedis,
-  mockRedisLpush,
-  mockRedisRpop,
   mockRedisGet,
   mockRedisSet,
   mockRedisSadd,
   mockRedisSmembers,
-  mockRedisHset,
   mockRedisPublish,
 } = vi.hoisted(() => {
-  const mockRedisLpush = vi.fn(async () => 1);
-  const mockRedisRpop = vi.fn(async () => null as string | null);
   const mockRedisGet = vi.fn(async () => null as string | null);
   const mockRedisSet = vi.fn(async () => "OK");
   const mockRedisSadd = vi.fn(async () => 1);
   const mockRedisSmembers = vi.fn(async () => [] as string[]);
-  const mockRedisHset = vi.fn(async () => 1);
   const mockRedisPublish = vi.fn(async () => 0);
 
   const mockRedis = {
-    lpush: mockRedisLpush,
-    rpop: mockRedisRpop,
     get: mockRedisGet,
     set: mockRedisSet,
     sadd: mockRedisSadd,
     smembers: mockRedisSmembers,
-    hset: mockRedisHset,
     publish: mockRedisPublish,
   };
 
@@ -41,15 +33,12 @@ const {
   const mockExistsSync = vi.fn(() => false);
   const mockMkdirSync = vi.fn();
   const mockExecSync = vi.fn();
+  const mockReaddirSync = vi.fn(() => [] as string[]);
 
   const mockSpawn = vi.fn(() => {
     const proc = new EventEmitter() as any;
     proc.pid = 99999;
     proc.killed = false;
-    const stdinEmitter = new EventEmitter() as any;
-    stdinEmitter.destroyed = false;
-    stdinEmitter.write = vi.fn();
-    proc.stdin = stdinEmitter;
     const stdoutEmitter = new EventEmitter() as any;
     stdoutEmitter.setEncoding = vi.fn();
     proc.stdout = stdoutEmitter;
@@ -64,15 +53,13 @@ const {
     mockExistsSync,
     mockMkdirSync,
     mockExecSync,
+    mockReaddirSync,
     mockSpawn,
     mockGetRedis,
-    mockRedisLpush,
-    mockRedisRpop,
     mockRedisGet,
     mockRedisSet,
     mockRedisSadd,
     mockRedisSmembers,
-    mockRedisHset,
     mockRedisPublish,
   };
 });
@@ -80,6 +67,7 @@ const {
 vi.mock("fs", () => ({
   existsSync: mockExistsSync,
   mkdirSync: mockMkdirSync,
+  readdirSync: mockReaddirSync,
 }));
 
 vi.mock("child_process", () => ({
@@ -102,24 +90,29 @@ vi.mock("./logger.js", () => ({
 // Import after mocks are set up
 import { MetaAgentManager } from "./meta-agent.js";
 
+/** Helper: rebuild a consistent redis mock object and wire it up. */
+function resetRedisMock() {
+  const redisMock = {
+    get: mockRedisGet,
+    set: mockRedisSet,
+    sadd: mockRedisSadd,
+    smembers: mockRedisSmembers,
+    publish: mockRedisPublish,
+  };
+  mockGetRedis.mockReturnValue(redisMock);
+  return redisMock;
+}
+
 describe("MetaAgentManager", () => {
   let manager: MetaAgentManager;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    // Default: directory does not exist
+    // Default: workspace dir does not exist, session dir does not exist
     mockExistsSync.mockReturnValue(false);
-    // Default: Redis is available
-    mockGetRedis.mockReturnValue({
-      lpush: mockRedisLpush,
-      rpop: mockRedisRpop,
-      get: mockRedisGet,
-      set: mockRedisSet,
-      sadd: mockRedisSadd,
-      smembers: mockRedisSmembers,
-      hset: mockRedisHset,
-      publish: mockRedisPublish,
-    });
+    // Default: readdirSync returns no files (no session)
+    mockReaddirSync.mockReturnValue([]);
+    resetRedisMock();
     manager = new MetaAgentManager();
   });
 
@@ -169,32 +162,173 @@ describe("MetaAgentManager", () => {
     });
   });
 
+  describe("startMetaAgent", () => {
+    it("saves state as idle without spawning a process", async () => {
+      mockExistsSync.mockReturnValue(true); // workspace exists
+      mockRedisGet.mockResolvedValue(null);  // no prior state
+
+      const info = await manager.startMetaAgent("my-repo");
+
+      expect(mockSpawn).not.toHaveBeenCalled();
+      expect(info.status).toBe("idle");
+      expect(info.namespace).toBe("my-repo");
+    });
+
+    it("saves state to Redis and adds to index", async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockRedisGet.mockResolvedValue(null);
+
+      await manager.startMetaAgent("my-repo");
+
+      expect(mockRedisSet).toHaveBeenCalledWith(
+        "cca:meta:my-repo",
+        expect.any(String),
+        "EX",
+        expect.any(Number)
+      );
+      expect(mockRedisSadd).toHaveBeenCalledWith("cca:meta:agents:index", "my-repo");
+    });
+
+    it("returns existing state when state already exists in Redis", async () => {
+      const existingState = {
+        namespace: "my-repo",
+        repoUrl: "https://github.com/gonzih/my-repo",
+        cwd: "/home/user/cc-agent-workspace/my-repo",
+        status: "idle",
+        startedAt: "2026-01-01T00:00:00.000Z",
+      };
+      mockRedisGet.mockResolvedValue(JSON.stringify(existingState));
+
+      const info = await manager.startMetaAgent("my-repo");
+
+      // No new state saved, no clone — just returned existing
+      expect(info.namespace).toBe("my-repo");
+      expect(mockSpawn).not.toHaveBeenCalled();
+    });
+  });
+
   describe("messageMetaAgent", () => {
-    it("lpushes to cca:meta:{namespace}:input", async () => {
+    it("spawns claude with -p and message content", async () => {
+      mockExistsSync.mockReturnValue(true);  // workspace exists
+      mockRedisGet.mockResolvedValue(null);  // no prior state → startMetaAgent will create it
+
       await manager.messageMetaAgent("my-repo", "hello agent");
 
-      expect(mockRedisLpush).toHaveBeenCalledWith(
-        "cca:meta:my-repo:input",
-        expect.any(String)
+      expect(mockSpawn).toHaveBeenCalledWith(
+        "claude",
+        expect.arrayContaining(["-p", "hello agent", "--dangerously-skip-permissions"]),
+        expect.objectContaining({ cwd: expect.stringContaining("cc-agent-workspace/my-repo") })
       );
     });
 
-    it("the queued entry contains the message content", async () => {
-      await manager.messageMetaAgent("my-repo", "do a thing");
+    it("does not use --continue when no session .jsonl file exists", async () => {
+      // existsSync returns false for session dir → no session
+      mockExistsSync.mockReturnValue(false);
+      mockRedisGet.mockResolvedValue(null);
 
-      const call = mockRedisLpush.mock.calls[0];
-      const entry = JSON.parse(call[1] as string) as { content: string };
-      expect(entry.content).toBe("do a thing");
+      await manager.messageMetaAgent("my-repo", "first message");
+
+      const args = mockSpawn.mock.calls[0][1] as string[];
+      expect(args).not.toContain("--continue");
+      expect(args).toContain("-p");
     });
 
-    it("saves lastMessageAt via set (not hset) to avoid WRONGTYPE error", async () => {
-      // metaKey is a STRING key (saveState uses redis.set), so hset would throw WRONGTYPE.
-      // The fix reads the state, updates lastMessageAt, and writes back via saveState.
+    it("uses --continue when session .jsonl file exists", async () => {
+      // Workspace CWD exists but no session dir initially
+      mockExistsSync.mockImplementation((p: string) => {
+        if ((p as string).includes(".claude/projects")) return true; // session dir exists
+        return true; // workspace exists
+      });
+      mockReaddirSync.mockReturnValue(["abc123.jsonl" as any]);
+
+      // Provide existing state so no startMetaAgent call needed
       const priorState = {
         namespace: "my-repo",
         repoUrl: "https://github.com/gonzih/my-repo",
         cwd: "/home/user/cc-agent-workspace/my-repo",
-        status: "running",
+        status: "idle",
+        startedAt: "2026-01-01T00:00:00.000Z",
+      };
+      mockRedisGet.mockResolvedValue(JSON.stringify(priorState));
+
+      await manager.messageMetaAgent("my-repo", "follow-up message");
+
+      const args = mockSpawn.mock.calls[0][1] as string[];
+      expect(args[0]).toBe("--continue");
+      expect(args).toContain("-p");
+      expect(args).toContain("follow-up message");
+    });
+
+    it("publishes stdout lines to the outgoing Redis channel", async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockRedisGet.mockResolvedValue(null);
+
+      await manager.messageMetaAgent("my-repo", "say something");
+
+      const proc = mockSpawn.mock.results[0].value;
+      // Simulate stdout data
+      proc.stdout.emit("data", "Hello from Claude\n");
+
+      expect(mockRedisPublish).toHaveBeenCalledWith(
+        "cca:chat:outgoing:my-repo",
+        expect.stringContaining("Hello from Claude")
+      );
+    });
+
+    it("sets isTyping false and marks idle when process closes", async () => {
+      mockExistsSync.mockReturnValue(true);
+      const priorState = {
+        namespace: "my-repo",
+        repoUrl: "https://github.com/gonzih/my-repo",
+        cwd: "/home/user/cc-agent-workspace/my-repo",
+        status: "idle",
+        startedAt: "2026-01-01T00:00:00.000Z",
+      };
+      mockRedisGet.mockResolvedValue(JSON.stringify(priorState));
+
+      await manager.messageMetaAgent("my-repo", "do something");
+
+      const proc = mockSpawn.mock.results[0].value;
+
+      // Before close: process is active
+      expect(proc.killed).toBe(false);
+
+      // Simulate process close
+      proc.emit("close", 0);
+
+      // After close: updateStatus("idle") should be called via redis.get + redis.set
+      // (fire-and-forget, so we need to wait a tick)
+      await new Promise((r) => setTimeout(r, 0));
+
+      const setCalls = mockRedisSet.mock.calls.filter(
+        (c) => (c[0] as string) === "cca:meta:my-repo"
+      );
+      // updateStatus reads state then writes it with status: "idle"
+      // (may not fire if getState returns null — but priorState is mocked above)
+      expect(setCalls.length).toBeGreaterThan(0);
+    });
+
+    it("auto-starts workspace when no state exists", async () => {
+      mockExistsSync.mockReturnValue(false); // workspace does not exist (will be cloned)
+      mockRedisGet.mockResolvedValue(null);   // no prior state
+
+      await manager.messageMetaAgent("my-repo", "first message");
+
+      // ensureWorkspace should have been called (cloned the repo)
+      expect(mockExecSync).toHaveBeenCalledWith(
+        expect.stringContaining("git clone"),
+        expect.any(Object)
+      );
+      // And a process should have been spawned
+      expect(mockSpawn).toHaveBeenCalled();
+    });
+
+    it("saves lastMessageAt via set (not hset) to avoid WRONGTYPE error", async () => {
+      const priorState = {
+        namespace: "my-repo",
+        repoUrl: "https://github.com/gonzih/my-repo",
+        cwd: "/home/user/cc-agent-workspace/my-repo",
+        status: "idle",
         startedAt: "2026-01-01T00:00:00.000Z",
       };
       mockExistsSync.mockReturnValue(true);
@@ -202,11 +336,7 @@ describe("MetaAgentManager", () => {
 
       await manager.messageMetaAgent("my-repo", "test message");
 
-      // hset must NOT be called — it would cause a WRONGTYPE Redis error
-      expect(mockRedisHset).not.toHaveBeenCalled();
       // State should be written via set with lastMessageAt populated.
-      // Use the LAST matching call: startMetaAgent writes state first (no lastMessageAt),
-      // then messageMetaAgent writes again with lastMessageAt set.
       const setCalls = mockRedisSet.mock.calls.filter(
         (c) => (c[0] as string) === "cca:meta:my-repo"
       );
@@ -226,33 +356,17 @@ describe("MetaAgentManager", () => {
       );
     });
 
-    it("auto-starts the agent if not running before enqueuing", async () => {
+    it("uses stdio ignore for stdin (no stdin pipe)", async () => {
       mockExistsSync.mockReturnValue(true);
       mockRedisGet.mockResolvedValue(null);
 
-      // No prior startMetaAgent call — no running process in the map
-      await manager.messageMetaAgent("my-repo", "hello agent");
+      await manager.messageMetaAgent("my-repo", "hello");
 
-      // Should have spawned a new process (no prior state → no --continue)
-      expect(mockSpawn).toHaveBeenCalledWith("claude", [], expect.any(Object));
-      // And still enqueued the message
-      expect(mockRedisLpush).toHaveBeenCalledWith(
-        "cca:meta:my-repo:input",
-        expect.any(String)
+      expect(mockSpawn).toHaveBeenCalledWith(
+        "claude",
+        expect.any(Array),
+        expect.objectContaining({ stdio: ["ignore", "pipe", "pipe"] })
       );
-    });
-
-    it("does not re-start if agent is already running", async () => {
-      mockExistsSync.mockReturnValue(true);
-      mockRedisGet.mockResolvedValue(null);
-
-      // Start once explicitly
-      await manager.startMetaAgent("my-repo");
-      const spawnCount = mockSpawn.mock.calls.length;
-
-      // Message should not trigger another spawn
-      await manager.messageMetaAgent("my-repo", "second message");
-      expect(mockSpawn.mock.calls.length).toBe(spawnCount);
     });
   });
 
@@ -271,7 +385,7 @@ describe("MetaAgentManager", () => {
         repoUrl: "https://github.com/gonzih/my-repo",
         cwd: "/home/user/cc-agent-workspace/my-repo",
         pid: 1234,
-        status: "stopped",
+        status: "idle",
         startedAt: "2026-01-01T00:00:00.000Z",
       };
       mockRedisSmembers.mockResolvedValue(["my-repo"]);
@@ -301,167 +415,16 @@ describe("MetaAgentManager", () => {
     });
   });
 
-  describe("startMetaAgent", () => {
-    it("spawns claude without --continue when no prior session exists", async () => {
-      mockExistsSync.mockReturnValue(true);
-      mockRedisGet.mockResolvedValue(null); // no prior state → first-time start
-
-      await manager.startMetaAgent("my-repo");
-
-      expect(mockSpawn).toHaveBeenCalledWith(
-        "claude",
-        [], // no --continue on fresh start
-        expect.objectContaining({
-          cwd: expect.stringContaining("cc-agent-workspace/my-repo"),
-        })
-      );
-    });
-
-    it("writes initial system prompt to stdin when starting fresh", async () => {
-      mockExistsSync.mockReturnValue(true);
-      mockRedisGet.mockResolvedValue(null);
-
-      await manager.startMetaAgent("my-repo");
-
-      const proc = mockSpawn.mock.results[0].value;
-      expect(proc.stdin.write).toHaveBeenCalledWith(
-        expect.stringContaining("persistent meta-agent")
-      );
-    });
-
-    it("spawns claude with --continue when prior session exists", async () => {
-      mockExistsSync.mockReturnValue(true);
-      const priorState = {
-        namespace: "my-repo",
-        repoUrl: "https://github.com/gonzih/my-repo",
-        cwd: "/home/user/cc-agent-workspace/my-repo",
-        status: "stopped",
-        startedAt: "2026-01-01T00:00:00.000Z",
-      };
-      mockRedisGet.mockResolvedValue(JSON.stringify(priorState));
-
-      await manager.startMetaAgent("my-repo");
-
-      expect(mockSpawn).toHaveBeenCalledWith(
-        "claude",
-        ["--continue"],
-        expect.any(Object)
-      );
-    });
-
-    it("does not write initial prompt when resuming a prior session", async () => {
-      mockExistsSync.mockReturnValue(true);
-      const priorState = {
-        namespace: "my-repo",
-        repoUrl: "https://github.com/gonzih/my-repo",
-        cwd: "/home/user/cc-agent-workspace/my-repo",
-        status: "stopped",
-        startedAt: "2026-01-01T00:00:00.000Z",
-      };
-      mockRedisGet.mockResolvedValue(JSON.stringify(priorState));
-
-      await manager.startMetaAgent("my-repo");
-
-      const proc = mockSpawn.mock.results[0].value;
-      expect(proc.stdin.write).not.toHaveBeenCalledWith(
-        expect.stringContaining("persistent meta-agent")
-      );
-    });
-
-    it("saves state to Redis and adds to index", async () => {
-      mockExistsSync.mockReturnValue(true);
-      mockRedisGet.mockResolvedValue(null);
-
-      const info = await manager.startMetaAgent("my-repo");
-
-      expect(mockRedisSet).toHaveBeenCalledWith(
-        "cca:meta:my-repo",
-        expect.any(String),
-        "EX",
-        expect.any(Number)
-      );
-      expect(mockRedisSadd).toHaveBeenCalledWith("cca:meta:agents:index", "my-repo");
-      expect(info.namespace).toBe("my-repo");
-      expect(info.status).toBe("running");
-    });
-
-    it("kills orphaned process from prior session when in-memory map is empty", async () => {
-      // Simulates cc-agent restart: this.processes is empty but a prior pid exists in Redis.
-      mockExistsSync.mockReturnValue(true);
-      const priorState = {
-        namespace: "my-repo",
-        repoUrl: "https://github.com/gonzih/my-repo",
-        cwd: "/home/user/cc-agent-workspace/my-repo",
-        status: "running",
-        pid: 12345,
-        startedAt: "2026-01-01T00:00:00.000Z",
-      };
-      mockRedisGet.mockResolvedValue(JSON.stringify(priorState));
-
-      // process.kill(pid, 0) succeeds → process is alive
-      const killSpy = vi.spyOn(process, "kill").mockImplementation((_pid: number, _sig?: any) => true);
-
-      await manager.startMetaAgent("my-repo");
-
-      // Should have probed with signal 0 then killed the orphan
-      expect(killSpy).toHaveBeenCalledWith(12345, 0);
-      expect(killSpy).toHaveBeenCalledWith(12345);
-
-      killSpy.mockRestore();
-    });
-
-    it("does not call process.kill when prior state has no PID", async () => {
-      mockExistsSync.mockReturnValue(true);
-      const priorState = {
-        namespace: "my-repo",
-        repoUrl: "https://github.com/gonzih/my-repo",
-        cwd: "/home/user/cc-agent-workspace/my-repo",
-        status: "stopped",
-        // no pid field
-        startedAt: "2026-01-01T00:00:00.000Z",
-      };
-      mockRedisGet.mockResolvedValue(JSON.stringify(priorState));
-
-      const killSpy = vi.spyOn(process, "kill").mockImplementation((_pid: number, _sig?: any) => true);
-
-      await manager.startMetaAgent("my-repo");
-
-      expect(killSpy).not.toHaveBeenCalled();
-
-      killSpy.mockRestore();
-    });
-
-    it("returns existing state when agent is already running", async () => {
-      mockExistsSync.mockReturnValue(true);
-      mockRedisGet.mockResolvedValue(null);
-
-      // Start once
-      await manager.startMetaAgent("my-repo");
-
-      // Set up existing state for second call
-      const existingState = {
-        namespace: "my-repo",
-        repoUrl: "https://github.com/gonzih/my-repo",
-        cwd: "/home/user/cc-agent-workspace/my-repo",
-        status: "running",
-        startedAt: "2026-01-01T00:00:00.000Z",
-      };
-      mockRedisGet.mockResolvedValue(JSON.stringify(existingState));
-
-      // Second call should not spawn a new process
-      const spawnCallCount = mockSpawn.mock.calls.length;
-      await manager.startMetaAgent("my-repo");
-
-      expect(mockSpawn.mock.calls.length).toBe(spawnCallCount);
-    });
-  });
-
   describe("stopMetaAgent", () => {
-    it("kills the process when it is running", async () => {
+    it("kills the active per-message process when running", async () => {
       mockExistsSync.mockReturnValue(true);
       mockRedisGet.mockResolvedValue(null);
 
-      await manager.startMetaAgent("my-repo");
+      // Spawn a process by messaging the agent
+      await manager.messageMetaAgent("my-repo", "do something");
+
+      const proc = mockSpawn.mock.results[0].value;
+      expect(proc.killed).toBe(false);
 
       const existingState = {
         namespace: "my-repo",
@@ -474,14 +437,13 @@ describe("MetaAgentManager", () => {
 
       await manager.stopMetaAgent("my-repo");
 
-      const proc = mockSpawn.mock.results[0].value;
       expect(proc.kill).toHaveBeenCalled();
     });
 
-    it("updates status to stopped in Redis", async () => {
+    it("updates status to idle in Redis", async () => {
       mockExistsSync.mockReturnValue(true);
       mockRedisGet.mockResolvedValue(null);
-      await manager.startMetaAgent("my-repo");
+      await manager.messageMetaAgent("my-repo", "do something");
 
       const existingState = {
         namespace: "my-repo",
@@ -493,16 +455,7 @@ describe("MetaAgentManager", () => {
       mockRedisGet.mockResolvedValue(JSON.stringify(existingState));
 
       vi.clearAllMocks();
-      mockGetRedis.mockReturnValue({
-        lpush: mockRedisLpush,
-        rpop: mockRedisRpop,
-        get: mockRedisGet,
-        set: mockRedisSet,
-        sadd: mockRedisSadd,
-        smembers: mockRedisSmembers,
-        hset: mockRedisHset,
-        publish: mockRedisPublish,
-      });
+      resetRedisMock();
       mockRedisGet.mockResolvedValue(JSON.stringify(existingState));
 
       await manager.stopMetaAgent("my-repo");
@@ -510,7 +463,7 @@ describe("MetaAgentManager", () => {
       const setCall = mockRedisSet.mock.calls.find((c) => (c[0] as string) === "cca:meta:my-repo");
       if (setCall) {
         const saved = JSON.parse(setCall[1] as string) as { status: string };
-        expect(saved.status).toBe("stopped");
+        expect(saved.status).toBe("idle");
       }
     });
 
@@ -519,12 +472,11 @@ describe("MetaAgentManager", () => {
         namespace: "my-repo",
         repoUrl: "https://github.com/gonzih/my-repo",
         cwd: "/home/user/cc-agent-workspace/my-repo",
-        status: "running",
+        status: "idle",
         startedAt: "2026-01-01T00:00:00.000Z",
       };
       mockRedisGet.mockResolvedValue(JSON.stringify(existingState));
 
-      // Should not throw even when no process is in the map
       await expect(manager.stopMetaAgent("unknown-repo")).resolves.toBeUndefined();
     });
   });

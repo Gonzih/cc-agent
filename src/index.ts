@@ -1495,7 +1495,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return {
           content: [{
             type: "text",
-            text: JSON.stringify({ ok: true, namespace: ns, message: "Message queued for delivery to meta-agent." }),
+            text: JSON.stringify({ ok: true, namespace: ns, message: "Message delivered to meta-agent. Responses will be published to cca:chat:outgoing:" + ns }),
           }],
         };
       } catch (err) {
