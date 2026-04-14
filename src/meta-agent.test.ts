@@ -589,6 +589,58 @@ describe("MetaAgentManager", () => {
       mockGetRedis.mockReturnValue(null);
       await expect((manager as any).pollInputQueues()).resolves.not.toThrow();
     });
+
+    it("writes coordinator input to chat log with role=user source=coordinator before spawning", async () => {
+      mockRedisSmembers.mockResolvedValue(["my-repo"]);
+      mockExistsSync.mockReturnValue(true);
+      const priorState = {
+        namespace: "my-repo",
+        repoUrl: "https://github.com/gonzih/my-repo",
+        cwd: "/home/user/cc-agent-workspace/my-repo",
+        status: "idle",
+        startedAt: "2026-01-01T00:00:00.000Z",
+      };
+      mockRedisGet.mockResolvedValue(JSON.stringify(priorState));
+
+      const queuedMessage = JSON.stringify({ content: "please do the thing" });
+      mockRedisRpop.mockResolvedValueOnce(queuedMessage).mockResolvedValue(null);
+
+      await (manager as any).pollInputQueues();
+      await new Promise((r) => setImmediate(r));
+
+      // Find the lpush call for the coordinator entry (before assistant entries)
+      const coordinatorCall = mockRedisLPush.mock.calls.find((c) => {
+        if ((c[0] as string) !== "cca:chat:log:my-repo") return false;
+        try {
+          const parsed = JSON.parse(c[1] as string) as {
+            role: string;
+            source: string;
+            content: string;
+          };
+          return parsed.role === "user" && parsed.source === "coordinator";
+        } catch {
+          return false;
+        }
+      });
+
+      expect(coordinatorCall).toBeDefined();
+      if (coordinatorCall) {
+        const entry = JSON.parse(coordinatorCall[1] as string) as {
+          role: string;
+          source: string;
+          content: string;
+          namespace: string;
+          timestamp: string;
+          id: string;
+        };
+        expect(entry.role).toBe("user");
+        expect(entry.source).toBe("coordinator");
+        expect(entry.content).toBe("please do the thing");
+        expect(entry.namespace).toBe("my-repo");
+        expect(entry.timestamp).toMatch(/^\d{4}-/);
+        expect(entry.id).toBeDefined();
+      }
+    });
   });
 
   describe("publishOutput / chat log persistence", () => {
