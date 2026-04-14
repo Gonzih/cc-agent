@@ -212,8 +212,8 @@ describe("MetaAgentManager", () => {
       // No prior startMetaAgent call — no running process in the map
       await manager.messageMetaAgent("my-repo", "hello agent");
 
-      // Should have spawned a new process
-      expect(mockSpawn).toHaveBeenCalledWith("claude", ["--continue"], expect.any(Object));
+      // Should have spawned a new process (no prior state → no --continue)
+      expect(mockSpawn).toHaveBeenCalledWith("claude", [], expect.any(Object));
       // And still enqueued the message
       expect(mockRedisLpush).toHaveBeenCalledWith(
         "cca:meta:my-repo:input",
