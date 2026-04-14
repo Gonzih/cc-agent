@@ -14,12 +14,18 @@ const {
   mockRedisSadd,
   mockRedisSmembers,
   mockRedisPublish,
+  mockRedisRpop,
+  mockRedisLPush,
+  mockRedisLTrim,
 } = vi.hoisted(() => {
   const mockRedisGet = vi.fn(async () => null as string | null);
   const mockRedisSet = vi.fn(async () => "OK");
   const mockRedisSadd = vi.fn(async () => 1);
   const mockRedisSmembers = vi.fn(async () => [] as string[]);
   const mockRedisPublish = vi.fn(async () => 0);
+  const mockRedisRpop = vi.fn(async () => null as string | null);
+  const mockRedisLPush = vi.fn(async () => 1);
+  const mockRedisLTrim = vi.fn(async () => "OK");
 
   const mockRedis = {
     get: mockRedisGet,
@@ -27,6 +33,9 @@ const {
     sadd: mockRedisSadd,
     smembers: mockRedisSmembers,
     publish: mockRedisPublish,
+    rpop: mockRedisRpop,
+    lPush: mockRedisLPush,
+    lTrim: mockRedisLTrim,
   };
 
   const mockGetRedis = vi.fn(() => mockRedis as typeof mockRedis | null);
@@ -61,6 +70,9 @@ const {
     mockRedisSadd,
     mockRedisSmembers,
     mockRedisPublish,
+    mockRedisRpop,
+    mockRedisLPush,
+    mockRedisLTrim,
   };
 });
 
@@ -98,6 +110,9 @@ function resetRedisMock() {
     sadd: mockRedisSadd,
     smembers: mockRedisSmembers,
     publish: mockRedisPublish,
+    rpop: mockRedisRpop,
+    lPush: mockRedisLPush,
+    lTrim: mockRedisLTrim,
   };
   mockGetRedis.mockReturnValue(redisMock);
   return redisMock;
@@ -112,6 +127,10 @@ describe("MetaAgentManager", () => {
     mockExistsSync.mockReturnValue(false);
     // Default: readdirSync returns no files (no session)
     mockReaddirSync.mockReturnValue([]);
+    // Default: input queue is empty, log ops succeed
+    mockRedisRpop.mockResolvedValue(null);
+    mockRedisLPush.mockResolvedValue(1);
+    mockRedisLTrim.mockResolvedValue("OK");
     resetRedisMock();
     manager = new MetaAgentManager();
   });
@@ -478,6 +497,149 @@ describe("MetaAgentManager", () => {
       mockRedisGet.mockResolvedValue(JSON.stringify(existingState));
 
       await expect(manager.stopMetaAgent("unknown-repo")).resolves.toBeUndefined();
+    });
+  });
+
+  describe("startPoller / pollInputQueues", () => {
+    it("startPoller registers an interval and stopPoller clears it", () => {
+      vi.useFakeTimers();
+      manager.startPoller();
+      // Starting twice is a no-op (pollerHandle already set)
+      manager.startPoller();
+      manager.stopPoller();
+      // Should not throw after stopping
+      manager.stopPoller();
+      vi.useRealTimers();
+    });
+
+    it("RPOP drains one message per namespace per tick and calls messageMetaAgent", async () => {
+      mockRedisSmembers.mockResolvedValue(["my-repo"]);
+      mockExistsSync.mockReturnValue(true);
+
+      const priorState = {
+        namespace: "my-repo",
+        repoUrl: "https://github.com/gonzih/my-repo",
+        cwd: "/home/user/cc-agent-workspace/my-repo",
+        status: "idle",
+        startedAt: "2026-01-01T00:00:00.000Z",
+      };
+      mockRedisGet.mockResolvedValue(JSON.stringify(priorState));
+
+      const queuedMessage = JSON.stringify({ content: "do the thing" });
+      mockRedisRpop.mockResolvedValueOnce(queuedMessage).mockResolvedValue(null);
+
+      // Call pollInputQueues directly (avoids fake-timer/fire-and-forget complexity)
+      await (manager as any).pollInputQueues();
+
+      // Flush all pending microtasks/macrotasks so the fire-and-forget messageMetaAgent settles
+      await new Promise((r) => setImmediate(r));
+
+      expect(mockRedisRpop).toHaveBeenCalledWith("cca:meta:my-repo:input");
+      // messageMetaAgent should have spawned claude with the message content
+      expect(mockSpawn).toHaveBeenCalledWith(
+        "claude",
+        expect.arrayContaining(["-p", "do the thing", "--dangerously-skip-permissions"]),
+        expect.any(Object)
+      );
+    });
+
+    it("skips namespace when a process is already active", async () => {
+      mockRedisSmembers.mockResolvedValue(["my-repo"]);
+      mockExistsSync.mockReturnValue(true);
+      mockRedisGet.mockResolvedValue(null);
+
+      // Spawn an active process first
+      await manager.messageMetaAgent("my-repo", "first");
+      const queuedMessage = JSON.stringify({ content: "second" });
+      mockRedisRpop.mockResolvedValue(queuedMessage);
+
+      // Poll directly — should skip because process is active
+      await (manager as any).pollInputQueues();
+
+      // RPOP should not have been called since process is still active
+      expect(mockRedisRpop).not.toHaveBeenCalled();
+    });
+
+    it("handles raw string messages (non-JSON) gracefully", async () => {
+      mockRedisSmembers.mockResolvedValue(["my-repo"]);
+      mockExistsSync.mockReturnValue(true);
+      const priorState = {
+        namespace: "my-repo",
+        repoUrl: "https://github.com/gonzih/my-repo",
+        cwd: "/home/user/cc-agent-workspace/my-repo",
+        status: "idle",
+        startedAt: "2026-01-01T00:00:00.000Z",
+      };
+      mockRedisGet.mockResolvedValue(JSON.stringify(priorState));
+
+      // Non-JSON raw string
+      mockRedisRpop.mockResolvedValueOnce("plain text message").mockResolvedValue(null);
+
+      await (manager as any).pollInputQueues();
+      await new Promise((r) => setImmediate(r));
+
+      expect(mockSpawn).toHaveBeenCalledWith(
+        "claude",
+        expect.arrayContaining(["-p", "plain text message"]),
+        expect.any(Object)
+      );
+    });
+
+    it("does not throw when Redis is unavailable during poll", async () => {
+      mockGetRedis.mockReturnValue(null);
+      await expect((manager as any).pollInputQueues()).resolves.not.toThrow();
+    });
+  });
+
+  describe("publishOutput / chat log persistence", () => {
+    it("publishes stdout lines to outgoing channel AND persists to chat log", async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockRedisGet.mockResolvedValue(null);
+
+      await manager.messageMetaAgent("my-repo", "say something");
+
+      const proc = mockSpawn.mock.results[0].value;
+      proc.stdout.emit("data", "Hello from Claude\n");
+
+      // Allow async publishOutput to settle
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(mockRedisPublish).toHaveBeenCalledWith(
+        "cca:chat:outgoing:my-repo",
+        expect.stringContaining("Hello from Claude")
+      );
+      expect(mockRedisLPush).toHaveBeenCalledWith(
+        "cca:chat:log:my-repo",
+        expect.stringContaining("Hello from Claude")
+      );
+      expect(mockRedisLTrim).toHaveBeenCalledWith("cca:chat:log:my-repo", 0, 499);
+    });
+
+    it("persists message as JSON with role assistant", async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockRedisGet.mockResolvedValue(null);
+
+      await manager.messageMetaAgent("my-repo", "say hello");
+
+      const proc = mockSpawn.mock.results[0].value;
+      proc.stdout.emit("data", "output line\n");
+
+      await new Promise((r) => setTimeout(r, 0));
+
+      const lPushCall = mockRedisLPush.mock.calls[0];
+      expect(lPushCall).toBeDefined();
+      if (lPushCall) {
+        const persisted = JSON.parse(lPushCall[1] as string) as {
+          role: string;
+          source: string;
+          content: string;
+          namespace: string;
+        };
+        expect(persisted.role).toBe("assistant");
+        expect(persisted.source).toBe("claude");
+        expect(persisted.content).toBe("output line");
+        expect(persisted.namespace).toBe("my-repo");
+      }
     });
   });
 });

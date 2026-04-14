@@ -36,10 +36,14 @@ interface LiveStatus {
   turnCount: number;
 }
 
+const INPUT_POLL_INTERVAL_MS = 3000;
+const CHAT_LOG_MAX = 499;
+
 export class MetaAgentManager {
   // Tracks in-flight per-message claude processes (one per namespace at most).
   private activeProcesses = new Map<string, ChildProcess>();
   private liveStatus = new Map<string, LiveStatus>();
+  private pollerHandle: ReturnType<typeof setInterval> | null = null;
 
   private metaKey(namespace: string): string {
     return `cca:meta:${namespace}`;
@@ -51,6 +55,56 @@ export class MetaAgentManager {
 
   private outChannel(namespace: string): string {
     return `cca:chat:outgoing:${namespace}`;
+  }
+
+  private inputKey(namespace: string): string {
+    return `cca:meta:${namespace}:input`;
+  }
+
+  private logKey(namespace: string): string {
+    return `cca:chat:log:${namespace}`;
+  }
+
+  /** Start the global background poller that drains per-namespace input queues every 3s. */
+  startPoller(): void {
+    if (this.pollerHandle) return;
+    this.pollerHandle = setInterval(() => {
+      this.pollInputQueues().catch(() => {});
+    }, INPUT_POLL_INTERVAL_MS);
+  }
+
+  /** Stop the background poller (useful in tests or graceful shutdown). */
+  stopPoller(): void {
+    if (this.pollerHandle) {
+      clearInterval(this.pollerHandle);
+      this.pollerHandle = null;
+    }
+  }
+
+  private async pollInputQueues(): Promise<void> {
+    const redis = getRedis();
+    if (!redis) return;
+    try {
+      const namespaces = await redis.smembers(META_AGENTS_INDEX);
+      for (const ns of namespaces) {
+        // One message at a time per namespace — skip if already processing.
+        if (this.activeProcesses.has(ns)) continue;
+        const raw = await redis.rpop(this.inputKey(ns));
+        if (!raw) continue;
+        let content: string;
+        try {
+          const parsed = JSON.parse(raw) as { content?: string };
+          content = parsed.content ?? raw;
+        } catch {
+          content = raw;
+        }
+        this.messageMetaAgent(ns, content).catch((err) => {
+          logger.warn("meta-agent:poller-message-failed", { namespace: ns, err: String(err) });
+        });
+      }
+    } catch (err) {
+      logger.warn("meta-agent:poller-failed", { err: String(err) });
+    }
   }
 
   async ensureWorkspace(namespace: string, repoUrl?: string): Promise<string> {
@@ -316,6 +370,8 @@ export class MetaAgentManager {
     });
     try {
       await redis.publish(this.outChannel(namespace), message);
+      await redis.lPush(this.logKey(namespace), message);
+      await redis.lTrim(this.logKey(namespace), 0, CHAT_LOG_MAX);
     } catch (err) {
       logger.warn("meta-agent:publish-failed", { namespace, err: String(err) });
     }
