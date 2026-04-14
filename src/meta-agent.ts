@@ -61,12 +61,25 @@ export class MetaAgentManager {
 
     const startedAt = new Date().toISOString();
 
-    const proc = spawn("claude", ["--continue"], {
+    // Only pass --continue if a prior session exists for this namespace.
+    // On first start, getState returns null → spawn fresh to avoid the
+    // "No deferred tool marker found" crash.
+    const priorState = await this.getState(namespace);
+    const claudeArgs = priorState ? ["--continue"] : [];
+
+    const proc = spawn("claude", claudeArgs, {
       cwd,
       stdio: ["pipe", "pipe", "pipe"],
       detached: false,
       env: process.env,
     });
+
+    // Give the fresh session an initial system message so Claude waits for input.
+    if (!priorState) {
+      proc.stdin?.write(
+        `You are a persistent meta-agent for the ${namespace} repository. Wait for incoming messages and act on them.\n`
+      );
+    }
 
     this.processes.set(namespace, proc);
 
