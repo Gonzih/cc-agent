@@ -150,7 +150,7 @@ describe("Coordinator", () => {
 
     expect(mockRedisPublish).toHaveBeenCalledWith(
       "cca:notify:test-ns",
-      "❌ My Job\nhttps://github.com/test/repo",
+      "❌ My Job (job_id: job-1)\nhttps://github.com/test/repo",
     );
   });
 
@@ -217,7 +217,7 @@ describe("Coordinator", () => {
 
     expect(mockRedisPublish).toHaveBeenCalledWith(
       "cca:notify:test-ns",
-      "✅ My Task\nhttps://github.com/test/repo",
+      "✅ My Task (job_id: job-1)\nhttps://github.com/test/repo",
     );
   });
 
@@ -234,7 +234,7 @@ describe("Coordinator", () => {
     expect(manager.spawn).toHaveBeenCalled();
     expect(mockRedisPublish).toHaveBeenCalledWith(
       "cca:notify:test-ns",
-      "✅ Parent Task\nhttps://github.com/test/repo",
+      "✅ Parent Task (job_id: job-1)\nhttps://github.com/test/repo",
     );
   });
 
@@ -245,7 +245,7 @@ describe("Coordinator", () => {
 
     expect(mockRedisPublish).toHaveBeenCalledWith(
       "cca:notify:test-ns",
-      "✅ Low scorer (score: 0.30)\nhttps://github.com/test/repo",
+      "✅ Low scorer (score: 0.30) (job_id: job-1)\nhttps://github.com/test/repo",
     );
   });
 
@@ -256,7 +256,7 @@ describe("Coordinator", () => {
 
     expect(mockRedisPublish).toHaveBeenCalledWith(
       "cca:notify:test-ns",
-      "✅ Great Job (score: 0.80)\nhttps://github.com/test/repo",
+      "✅ Great Job (score: 0.80) (job_id: job-1)\nhttps://github.com/test/repo",
     );
   });
 });
