@@ -1,22 +1,17 @@
-# Plan: Log coordinator inputs to chat log
+# Plan: Include job ID in completion notifications
 
 ## Task Restatement
-When `message_meta_agent` MCP pushes a message to `cca:meta:{namespace}:input`,
-`pollInputQueues` dequeues it and passes it to Claude via `messageMetaAgent`.
-But the incoming message is never written to `cca:chat:log:{namespace}`.
-Result: the chat log only has assistant (`role: "assistant"`) responses —
-the user-side messages are invisible to the UI.
+Job completion/failure notifications pushed to `cca:notify:{namespace}` currently
+show the title and score but not the job ID. Users can't correlate a Telegram
+alert with a specific job in cc-agent-ui. Fix: embed `job_id` in the message.
 
-## Fix
-In `pollInputQueues`, immediately after extracting `content` from the dequeued
-raw value, write a log entry to `cca:chat:log:{namespace}` via lpush+ltrim
-with shape:
-```json
-{ "id": "<uuid>", "role": "user", "source": "coordinator", "namespace": "...",
-  "content": "...", "timestamp": "<ISO>" }
-```
-This matches the structure of assistant entries (same key, same ltrim cap of 499).
+## Approach
+Single-line change in `coordinator.ts` `processEvent`:
+Current: `${icon} ${title}${scoreStr}\n${repoUrl}`
+New:     `${icon} ${title}${scoreStr} (job_id: ${jobId})\n${repoUrl}`
+
+`jobId` is already destructured from the event on line 108.
 
 ## Files to Touch
-- `src/meta-agent.ts` — add lpush/ltrim call in pollInputQueues
-- `src/meta-agent.test.ts` — add test verifying coordinator input is logged
+- `src/coordinator.ts` — update notification message format (1 line)
+- `src/coordinator.test.ts` — update 5 exact-string test assertions to match new format

@@ -117,7 +117,7 @@ export class Coordinator {
     if (status === "done" || status === "failed") {
       const icon = status === "done" ? "✅" : "❌";
       const scoreStr = typeof score === "number" ? ` (score: ${score.toFixed(2)})` : "";
-      await notify(this.namespace, `${icon} ${title}${scoreStr}\n${repoUrl}`);
+      await notify(this.namespace, `${icon} ${title}${scoreStr} (job_id: ${jobId})\n${repoUrl}`);
     }
   }
 
