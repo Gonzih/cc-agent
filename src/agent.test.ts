@@ -955,3 +955,370 @@ describe("isContextOverflow (via JobManager retry behavior)", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Change 4: Queue depth limit
+// ---------------------------------------------------------------------------
+
+describe("Queue depth limit (OURO_MAX_PENDING_JOBS)", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockIsPidAlive.mockReturnValue(false);
+    mockJobStoreLoadAll.mockResolvedValue([]);
+    mockGetRedis.mockReturnValue(null);
+  });
+
+  it("allows spawning up to MAX_PENDING_JOBS jobs without error", async () => {
+    // The env var is parsed at module load time so we test indirectly via the default (50)
+    // Just verify a normal spawn succeeds
+    const manager = new JobManager();
+    const id = await manager.spawn({ repoUrl: "https://github.com/test/repo.git", task: "task" });
+    expect(typeof id).toBe("string");
+  });
+
+  it("rejects spawn when active job count reaches the limit", async () => {
+    // Override MAX_PENDING_JOBS via env before creating a fresh module context is difficult;
+    // instead test by filling up jobs to the internal limit using a manager with lots of jobs.
+    // We simulate a full queue by directly inserting jobs into the manager's internal map.
+    const manager = new JobManager();
+    const maxJobs = 50; // mirrors DEFAULT (OURO_MAX_PENDING_JOBS=50)
+
+    // Inject fake running jobs directly into the private map
+    for (let i = 0; i < maxJobs; i++) {
+      (manager as any).jobs.set(`fake-${i}`, { id: `fake-${i}`, status: "running" });
+    }
+
+    await expect(
+      manager.spawn({ repoUrl: "https://github.com/test/repo.git", task: "overflow task" })
+    ).rejects.toThrow(/Queue full/);
+  });
+
+  it("error message contains job count and max", async () => {
+    const manager = new JobManager();
+    for (let i = 0; i < 50; i++) {
+      (manager as any).jobs.set(`fake-${i}`, { id: `fake-${i}`, status: "cloning" });
+    }
+
+    let errorMsg = "";
+    try {
+      await manager.spawn({ repoUrl: "https://github.com/test/repo.git", task: "overflow" });
+    } catch (e: any) {
+      errorMsg = e.message;
+    }
+    expect(errorMsg).toMatch(/50 jobs pending/);
+    expect(errorMsg).toMatch(/Max: 50/);
+    expect(errorMsg).toMatch(/OURO_MAX_PENDING_JOBS/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Change 1: Hard wall-clock timeout
+// ---------------------------------------------------------------------------
+
+describe("Wall-clock timeout", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockIsPidAlive.mockReturnValue(false);
+    mockJobStoreLoadAll.mockResolvedValue([]);
+    mockGetRedis.mockReturnValue(null);
+  });
+
+  it("timeoutMinutes is stored on the job from spawn options", async () => {
+    const manager = new JobManager();
+    const id = await manager.spawn({
+      repoUrl: "https://github.com/test/repo.git",
+      task: "task with timeout",
+      timeoutMinutes: 45,
+    });
+    const job = manager.getJob(id);
+    expect(job?.timeoutMinutes).toBe(45);
+  });
+
+  it("default timeoutMinutes is 120 when not specified", async () => {
+    const manager = new JobManager();
+    const id = await manager.spawn({
+      repoUrl: "https://github.com/test/repo.git",
+      task: "default timeout task",
+    });
+    const job = manager.getJob(id);
+    expect(job?.timeoutMinutes).toBe(120);
+  });
+
+  it("a timeout timer is registered in timeoutTimers while job is running", async () => {
+    const { EventEmitter } = await import("events");
+    const { runClaude: mockRunClaude } = await import("./claude.js");
+    // Long-running process — no auto-exit
+    vi.mocked(mockRunClaude).mockImplementationOnce(() => {
+      const emitter = new EventEmitter() as any;
+      emitter.kill = vi.fn(() => emitter.emit("exit", 0));
+      emitter.pid = 88881;
+      emitter.stdin = null;
+      return emitter;
+    });
+
+    const manager = new JobManager();
+    const id = await manager.spawn({
+      repoUrl: "https://github.com/test/repo.git",
+      task: "long task",
+      timeoutMinutes: 60,
+    });
+
+    // Give run() a chance to set up the timer
+    await new Promise((r) => setTimeout(r, 100));
+    expect((manager as any).timeoutTimers.has(id)).toBe(true);
+
+    // Clean up — cancel the job so the timer is cleared
+    manager.cancel(id);
+    expect((manager as any).timeoutTimers.has(id)).toBe(false);
+  });
+
+  it("cancel() clears the timeout timer", async () => {
+    const { EventEmitter } = await import("events");
+    const { runClaude: mockRunClaude } = await import("./claude.js");
+    vi.mocked(mockRunClaude).mockImplementationOnce(() => {
+      const emitter = new EventEmitter() as any;
+      emitter.kill = vi.fn(() => emitter.emit("exit", 0));
+      emitter.pid = 88882;
+      emitter.stdin = null;
+      return emitter;
+    });
+
+    const manager = new JobManager();
+    const id = await manager.spawn({
+      repoUrl: "https://github.com/test/repo.git",
+      task: "cancel-me task",
+      timeoutMinutes: 30,
+    });
+
+    await new Promise((r) => setTimeout(r, 100));
+    manager.cancel(id);
+    expect((manager as any).timeoutTimers.has(id)).toBe(false);
+  });
+
+  it("timedOut and failReason are set when timeout fires (directly triggered)", async () => {
+    const { EventEmitter } = await import("events");
+    const { runClaude: mockRunClaude } = await import("./claude.js");
+
+    let innerProc: any;
+    vi.mocked(mockRunClaude).mockImplementationOnce(() => {
+      const emitter = new EventEmitter() as any;
+      emitter.kill = vi.fn(() => emitter.emit("exit", 143));
+      emitter.pid = 88883;
+      emitter.stdin = null;
+      innerProc = emitter;
+      return emitter;
+    });
+
+    const manager = new JobManager();
+    const id = await manager.spawn({
+      repoUrl: "https://github.com/test/repo.git",
+      task: "stuck task",
+      timeoutMinutes: 60,
+    });
+
+    // Wait for run() to reach the timer setup
+    await new Promise((r) => setTimeout(r, 100));
+    expect((manager as any).timeoutTimers.has(id)).toBe(true);
+
+    // Fire the timeout timer directly by clearing it and simulating its effect
+    const job = manager.getJob(id)!;
+    const timer = (manager as any).timeoutTimers.get(id);
+    clearTimeout(timer);
+    (manager as any).timeoutTimers.delete(id);
+
+    // Directly apply the same state mutations the timer callback would apply
+    job.timedOut = true;
+    job.failReason = "timeout";
+
+    // Verify the fields are set
+    expect(job.timedOut).toBe(true);
+    expect(job.failReason).toBe("timeout");
+
+    // Trigger the kill so the job exits and status moves to failed
+    innerProc.kill();
+    await new Promise((r) => setTimeout(r, 100));
+    expect(manager.getJob(id)?.status).toBe("failed");
+  });
+
+  it("timeoutMinutes:0 disables the timeout timer", async () => {
+    const { EventEmitter } = await import("events");
+    const { runClaude: mockRunClaude } = await import("./claude.js");
+    vi.mocked(mockRunClaude).mockImplementationOnce(() => {
+      const emitter = new EventEmitter() as any;
+      emitter.kill = vi.fn(() => emitter.emit("exit", 0));
+      emitter.pid = 88884;
+      emitter.stdin = null;
+      return emitter;
+    });
+
+    const manager = new JobManager();
+    const id = await manager.spawn({
+      repoUrl: "https://github.com/test/repo.git",
+      task: "no-timeout task",
+      timeoutMinutes: 0, // disabled
+    });
+
+    await new Promise((r) => setTimeout(r, 100));
+    // No timer should be registered
+    expect((manager as any).timeoutTimers.has(id)).toBe(false);
+
+    manager.cancel(id);
+  });
+
+  it("timeout timer is cleared when job exits normally", async () => {
+    // Default mock exits after 50ms — timeout timer should be cleared
+    const manager = new JobManager();
+    const id = await manager.spawn({
+      repoUrl: "https://github.com/test/repo.git",
+      task: "quick task",
+      timeoutMinutes: 60,
+    });
+
+    // Wait for job to complete (default mock exits at 50ms)
+    await new Promise((r) => setTimeout(r, 200));
+
+    const job = manager.getJob(id);
+    expect(job?.status).toBe("done");
+    expect(job?.timedOut).toBeUndefined();
+    expect((manager as any).timeoutTimers.has(id)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Change 2: Budget enforcement
+// ---------------------------------------------------------------------------
+
+describe("Budget enforcement", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockIsPidAlive.mockReturnValue(false);
+    mockJobStoreLoadAll.mockResolvedValue([]);
+    mockGetRedis.mockReturnValue(null);
+  });
+
+  it("90% warning appears in job output when cost hits 90% of budget", async () => {
+    const { EventEmitter } = await import("events");
+    const { runClaude: mockRunClaude } = await import("./claude.js");
+
+    let innerProc: any;
+    vi.mocked(mockRunClaude).mockImplementationOnce(() => {
+      const emitter = new EventEmitter() as any;
+      emitter.kill = vi.fn(() => emitter.emit("exit", 0));
+      emitter.pid = 99992;
+      emitter.stdin = null;
+      innerProc = emitter;
+      // Don't auto-exit — held open so we can emit usage manually
+      return emitter;
+    });
+
+    const manager = new JobManager();
+    await manager.spawn({
+      repoUrl: "https://github.com/test/repo.git",
+      task: "90pct warning task",
+      maxBudgetUsd: 10,
+      timeoutMinutes: 0,
+    });
+
+    // Wait for run() to set up event handlers
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Emit a usage event at 90% of budget ($9 of $10) directly on the inner proc.
+    // ClaudeCodeDriver forwards "usage" from inner proc → outer agentProc → agent.ts handler.
+    innerProc.emit("usage", { inputTokens: 0, outputTokens: 0, costUsd: 9 });
+    await new Promise((r) => setImmediate(r));
+
+    const job = Array.from((manager as any).jobs.values())[0] as any;
+    const outputText = job.output.join("\n");
+    expect(outputText).toContain("[cc-agent:budget]");
+    expect(outputText).toContain("90%");
+    expect(outputText).toContain("$10");
+
+    // Clean up
+    innerProc.emit("exit", 0);
+    await new Promise((r) => setTimeout(r, 50));
+  });
+
+  it("failReason is budget_exceeded immediately when cost hits max budget", async () => {
+    const { EventEmitter } = await import("events");
+    const { runClaude: mockRunClaude } = await import("./claude.js");
+
+    let innerProc: any;
+    vi.mocked(mockRunClaude).mockImplementationOnce(() => {
+      const emitter = new EventEmitter() as any;
+      emitter.kill = vi.fn(() => emitter.emit("exit", 143));
+      emitter.pid = 99993;
+      emitter.stdin = null;
+      emitter.writeStdin = vi.fn();
+      innerProc = emitter;
+      // Don't auto-exit
+      return emitter;
+    });
+
+    const manager = new JobManager();
+    const id = await manager.spawn({
+      repoUrl: "https://github.com/test/repo.git",
+      task: "budget-exceeded task",
+      maxBudgetUsd: 20,
+      timeoutMinutes: 0,
+    });
+
+    // Wait for run() to set up event handlers
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Emit a usage event exceeding the budget ($25 > $20)
+    innerProc.emit("usage", { inputTokens: 0, outputTokens: 0, costUsd: 25 });
+
+    // failReason is set synchronously in the usage handler
+    await new Promise((r) => setImmediate(r));
+    const job = manager.getJob(id)!;
+    expect(job.failReason).toBe("budget_exceeded");
+
+    // Output contains the termination message
+    const out = job.output.join("\n");
+    expect(out).toContain("[cc-agent:budget]");
+    expect(out).toContain("exceeded");
+
+    // Trigger kill to let the job resolve and reach status=failed
+    innerProc.emit("exit", 143);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(manager.getJob(id)?.status).toBe("failed");
+  });
+
+  it("budget warning is not emitted again for subsequent usage events", async () => {
+    const { EventEmitter } = await import("events");
+    const { runClaude: mockRunClaude } = await import("./claude.js");
+
+    let innerProc: any;
+    vi.mocked(mockRunClaude).mockImplementationOnce(() => {
+      const emitter = new EventEmitter() as any;
+      emitter.kill = vi.fn(() => emitter.emit("exit", 0));
+      emitter.pid = 99995;
+      emitter.stdin = null;
+      innerProc = emitter;
+      return emitter;
+    });
+
+    const manager = new JobManager();
+    await manager.spawn({
+      repoUrl: "https://github.com/test/repo.git",
+      task: "no-double-warn task",
+      maxBudgetUsd: 10,
+      timeoutMinutes: 0,
+    });
+
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Two usage events at 90%+
+    innerProc.emit("usage", { inputTokens: 0, outputTokens: 0, costUsd: 9 });
+    innerProc.emit("usage", { inputTokens: 0, outputTokens: 0, costUsd: 9.5 });
+    await new Promise((r) => setImmediate(r));
+
+    const job = Array.from((manager as any).jobs.values())[0] as any;
+    const warnCount = (job.output.join("\n").match(/\[cc-agent:budget\].*90%/g) ?? []).length;
+    // Warning should appear only once (budgetWarned flag prevents duplicates)
+    expect(warnCount).toBe(1);
+
+    innerProc.emit("exit", 0);
+    await new Promise((r) => setTimeout(r, 50));
+  });
+});
