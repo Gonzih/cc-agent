@@ -1,9 +1,9 @@
-import { EventEmitter } from "events";
 import { existsSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 import { runClaude, resolveClaude } from "../claude.js";
 import { getPricing } from "./pricing.js";
+import { BaseAgentProcess } from "./types.js";
 import type { AgentDriver, AgentProcess, SpawnOptions, UsageEvent } from "./types.js";
 
 /**
@@ -51,7 +51,7 @@ export class ClaudeCodeDriver implements AgentDriver {
 
     // Adapt OneShot interface → AgentProcess interface
     // Main difference: "session" event → "sessionId" event
-    const emitter = new EventEmitter() as AgentProcess;
+    const emitter = new BaseAgentProcess();
 
     proc.on("text", (text: string) => emitter.emit("text", text));
     proc.on("tool", (name: string) => emitter.emit("tool", name));

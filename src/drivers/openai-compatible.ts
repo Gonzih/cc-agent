@@ -15,13 +15,13 @@
  * Max 50 iterations to prevent runaway loops.
  */
 
-import { EventEmitter } from "events";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { writeFile, readFile, readdir } from "fs/promises";
 import { join, isAbsolute, resolve, relative } from "path";
 import { existsSync } from "fs";
 import { getPricing } from "./pricing.js";
+import { BaseAgentProcess } from "./types.js";
 import type { AgentDriver, AgentProcess, SpawnOptions, UsageEvent } from "./types.js";
 
 const execFileAsync = promisify(execFile);
@@ -169,7 +169,7 @@ export class OpenAICompatibleDriver implements AgentDriver {
   }
 
   spawn(options: SpawnOptions): AgentProcess {
-    const emitter = new EventEmitter() as AgentProcess;
+    const emitter = new BaseAgentProcess();
     let killed = false;
 
     emitter.kill = (_signal?: string) => {
@@ -178,10 +178,10 @@ export class OpenAICompatibleDriver implements AgentDriver {
 
     (async () => {
       try {
-        await this.runLoop(options, emitter, () => killed);
+        await this.runLoop(options, emitter as BaseAgentProcess, () => killed);
       } catch (err) {
-        emitter.emit("text", `[${this.name}] Fatal error: ${String(err)}`);
-        emitter.emit("exit", 1);
+        (emitter as BaseAgentProcess).emit("text", `[${this.name}] Fatal error: ${String(err)}`);
+        (emitter as BaseAgentProcess).emit("exit", 1);
       }
     })();
 
@@ -286,7 +286,7 @@ export class OpenAICompatibleDriver implements AgentDriver {
 
   private async runLoop(
     options: SpawnOptions,
-    emitter: AgentProcess,
+    emitter: BaseAgentProcess,
     isKilled: () => boolean
   ): Promise<void> {
     const apiKey = this.resolveApiKey(options);

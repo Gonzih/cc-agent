@@ -1,8 +1,8 @@
-import { EventEmitter } from "events";
 import { existsSync } from "fs";
 import { join } from "path";
 import { spawn } from "child_process";
 import { getPricing } from "./pricing.js";
+import { BaseAgentProcess } from "./types.js";
 import type { AgentDriver, AgentProcess, SpawnOptions, UsageEvent } from "./types.js";
 
 /**
@@ -57,7 +57,7 @@ export class AiderDriver implements AgentDriver {
     }
 
     let killed = false;
-    const emitter = new EventEmitter() as AgentProcess;
+    const emitter = new BaseAgentProcess();
 
     let proc: ReturnType<typeof spawn>;
     try {

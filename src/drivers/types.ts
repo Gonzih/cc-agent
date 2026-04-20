@@ -1,3 +1,5 @@
+import { EventEmitter } from "events";
+
 export interface SpawnOptions {
   cwd: string;
   task: string;
@@ -43,4 +45,17 @@ export interface AgentPricing {
   outputPer1M: number;
   cacheReadPer1M?: number;
   cacheWritePer1M?: number;
+}
+
+/**
+ * Concrete base class for AgentProcess implementations.
+ * Extends EventEmitter so drivers can call .emit() and
+ * satisfies the AgentProcess interface by declaring all required members.
+ */
+export class BaseAgentProcess extends EventEmitter implements AgentProcess {
+  pid?: number;
+  writeStdin?: (data: string) => void;
+
+  /** Implementations must override this. Default is a no-op. */
+  kill(_signal?: string): void {}
 }
