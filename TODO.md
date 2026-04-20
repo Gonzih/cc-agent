@@ -1,11 +1,19 @@
-# TODO — include job_id in completion notifications
+# TODO — multi-agent driver abstraction
 
 - [x] Write PLAN.md and TODO.md
-- [ ] Create feature branch
-- [ ] Edit processEvent in src/coordinator.ts to add job_id to notification
-- [ ] Update test expectations in src/coordinator.test.ts
+- [ ] Create feature branch feat/multi-agent-driver
+- [ ] Create src/drivers/types.ts
+- [ ] Create src/drivers/pricing.ts
+- [ ] Create src/drivers/claude-code.ts
+- [ ] Create src/drivers/aider.ts
+- [ ] Create src/drivers/openai-compatible.ts
+- [ ] Create src/drivers/index.ts
+- [ ] Extend src/types.ts with agentDriver/agentModel
+- [ ] Extend src/store.ts with agentDriver/agentModel in JobRecord
+- [ ] Refactor src/agent.ts to use driver
+- [ ] Extend src/index.ts with new MCP params + list_drivers
+- [ ] Write driver tests
 - [ ] npm install && npm test
-- [ ] Commit and push
+- [ ] Commit + push
 - [ ] gh pr create + gh pr merge --squash --auto
-- [ ] npm version patch && npm publish --access public
-- [ ] redis-cli notify
+- [ ] npm version minor && npm publish --access public

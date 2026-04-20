@@ -72,6 +72,8 @@ export interface JobRecord {
   interruptedAt?: string;
   tokenIndex?: number;
   onComplete?: OnComplete;
+  agentDriver?: string;
+  agentModel?: string;
 }
 
 export class JobStore {
