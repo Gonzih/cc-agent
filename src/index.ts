@@ -28,7 +28,8 @@ import { listDrivers, getDriverStatus } from "./drivers/index.js";
 import { MetaAgentManager } from "./meta-agent.js";
 import { buildEvaluatorTask } from "./evaluator.js";
 import { loadProfiles, upsertProfile, deleteProfile, getProfile, interpolate } from "./profiles.js";
-import { planStore, jobStore, learningsStore } from "./store.js";
+import { planStore, jobStore, learningsStore, profileStore } from "./store.js";
+import { seedBuiltinProfiles } from "./seeds.js";
 import { getNamespace } from "./namespace.js";
 import { initRedis, getRedis } from "./redis.js";
 import { logger } from "./logger.js";
@@ -981,11 +982,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
     case "list_profiles": {
       logger.info("tool:list_profiles");
-      const profiles = (await loadProfiles()).map(({ name, repoUrl, description, defaultBudgetUsd }) => ({
+      const profiles = (await loadProfiles()).map(({ name, repoUrl, description, defaultBudgetUsd, builtin }) => ({
         name,
         repoUrl,
         description,
         defaultBudgetUsd,
+        builtin: builtin ?? false,
+        tag: builtin ? "[builtin]" : undefined,
       }));
       return {
         content: [{ type: "text", text: JSON.stringify({ profiles, total: profiles.length }) }],
@@ -1618,6 +1621,7 @@ if (redis) {
   logger.info(`[cc-agent] version ${PKG_VERSION} written to Redis`);
 }
 await manager.init();
+await seedBuiltinProfiles(profileStore);
 await coordinator.start();
 await cronEngine.start();
 metaAgentManager.startPoller();

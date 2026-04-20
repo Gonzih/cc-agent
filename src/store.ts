@@ -237,6 +237,7 @@ export interface Profile {
   branch?: string;
   description?: string;
   preamble?: string;
+  builtin?: boolean;
   createdAt: string;
 }
 
