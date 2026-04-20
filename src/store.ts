@@ -76,6 +76,9 @@ export interface JobRecord {
   agentModel?: string;
   noPreamble?: boolean;
   retryCount?: number;
+  timeoutMinutes?: number;
+  timedOut?: boolean;
+  failReason?: string;
 }
 
 export class JobStore {

@@ -194,6 +194,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             description:
               "If true, no preamble is injected — the raw task is passed directly to the agent. Overrides custom_preamble.",
           },
+          timeout_minutes: {
+            type: "number",
+            description:
+              "Wall-clock timeout in minutes per active run. Job is terminated (SIGTERM then SIGKILL) if it exceeds this limit. Set to 0 to disable. Default: 120 (2 hours).",
+          },
           coordinator_plan: {
             type: "object",
             description: "Optional plan for cc-tg coordinator. If set, cc-tg will spawn the nextStep when this job completes.",
@@ -742,6 +747,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         openaiApiKey: a.openai_api_key as string | undefined,
         preamble: a.custom_preamble as string | undefined,
         noPreamble: a.no_preamble === true,
+        timeoutMinutes: a.timeout_minutes as number | undefined,
       });
 
       if (a.coordinator_plan) {

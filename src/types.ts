@@ -89,6 +89,9 @@ export interface Job {
   openaiApiKey?: string;       // API key override for OpenAI-compatible drivers
   noPreamble?: boolean;        // if true, no preamble injected — raw task passed directly
   retryCount?: number;         // auto-retry counter (max 1 context-overflow retry)
+  timeoutMinutes?: number;     // wall-clock timeout in minutes (0 = disabled, default 120)
+  timedOut?: boolean;          // true if job was killed due to timeout
+  failReason?: string;         // machine-readable failure reason: 'timeout' | 'budget_exceeded'
 }
 
 export interface SpawnOptions {
@@ -120,6 +123,7 @@ export interface SpawnOptions {
   openaiBaseUrl?: string;      // base URL for OpenAI-compatible drivers
   openaiApiKey?: string;       // API key override for OpenAI-compatible drivers
   noPreamble?: boolean;        // if true, no preamble injected — raw task passed directly
+  timeoutMinutes?: number;     // wall-clock timeout in minutes per run() invocation (0 = disabled, default 120)
 }
 
 export interface JobSummary {

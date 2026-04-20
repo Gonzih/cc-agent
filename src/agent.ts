@@ -21,6 +21,37 @@ const execFileAsync = promisify(execFile);
 
 const JOB_TTL_MS = 60 * 60 * 1000; // 1 hour — clean up old done jobs from memory
 
+const DEFAULT_TIMEOUT_MINUTES = 120;
+const MAX_PENDING_JOBS = parseInt(process.env.OURO_MAX_PENDING_JOBS ?? "50", 10);
+
+/**
+ * Attempt a graceful agent shutdown:
+ *   1. Write a [SYSTEM] message to stdin (gives the agent a chance to save work)
+ *   2. Wait 10 s
+ *   3. SIGTERM via agentProc.kill()
+ *   4. Wait 5 s
+ *   5. SIGKILL via process.kill(pid) if the PID is known
+ */
+async function terminateGracefully(agentProc: import("./drivers/types.js").AgentProcess, reason: string): Promise<void> {
+  if (agentProc.writeStdin) {
+    try {
+      agentProc.writeStdin(
+        `\n[SYSTEM: job termination requested — please save any work in progress and exit cleanly]\n`
+      );
+    } catch { /* stdin may already be closed */ }
+  }
+
+  await new Promise<void>((resolve) => setTimeout(resolve, 10_000));
+
+  try { agentProc.kill(); } catch { /* already dead */ }
+
+  await new Promise<void>((resolve) => setTimeout(resolve, 5_000));
+
+  if (agentProc.pid) {
+    try { process.kill(agentProc.pid, "SIGKILL"); } catch { /* already dead */ }
+  }
+}
+
 export const DOCKER_PREAMBLE = `[DOCKER CONTAINER MODE]
 You are running inside an isolated Docker container as user 'agent'.
 You have passwordless sudo access — install any system packages you need freely:
@@ -261,6 +292,9 @@ function toRecord(job: Job): JobRecord {
     agentModel: job.agentModel,
     noPreamble: job.noPreamble,
     retryCount: job.retryCount,
+    timeoutMinutes: job.timeoutMinutes,
+    timedOut: job.timedOut,
+    failReason: job.failReason,
   };
 }
 
@@ -306,6 +340,9 @@ function fromRecord(r: JobRecord): Job {
     agentModel: r.agentModel,
     noPreamble: r.noPreamble,
     retryCount: r.retryCount ?? 0,
+    timeoutMinutes: r.timeoutMinutes,
+    timedOut: r.timedOut,
+    failReason: r.failReason,
   };
 }
 
@@ -316,6 +353,7 @@ export class JobManager {
   private jobs = new Map<string, Job>();
   private kills = new Map<string, () => void>();
   private wakeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private timeoutTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private approvalPollers = new Map<string, { intervalId: ReturnType<typeof setInterval>; startTime: number }>();
   private defaultToken?: string;
   /** Jobs restored from storage — their output lives in store, not in job.output[]. */
@@ -505,6 +543,19 @@ export class JobManager {
   }
 
   async spawn(opts: SpawnOptions): Promise<string> {
+    // Queue depth guard: reject if too many active jobs
+    if (MAX_PENDING_JOBS > 0) {
+      const activeStatuses: Job["status"][] = ["pending", "cloning", "running"];
+      const activeCount = Array.from(this.jobs.values()).filter(
+        (j) => activeStatuses.includes(j.status)
+      ).length;
+      if (activeCount >= MAX_PENDING_JOBS) {
+        throw new Error(
+          `Queue full: ${activeCount} jobs pending. Max: ${MAX_PENDING_JOBS}. Cancel some jobs or increase OURO_MAX_PENDING_JOBS.`
+        );
+      }
+    }
+
     // Prepend prior repo learnings to the task
     const rk = repoKey(opts.repoUrl);
     const priorLearnings = await learningsStore.getLearnings(rk, 1);
@@ -570,6 +621,7 @@ export class JobManager {
       agentModel: opts.agentModel,
       noPreamble: opts.noPreamble,
       retryCount: 0,
+      timeoutMinutes: opts.timeoutMinutes ?? DEFAULT_TIMEOUT_MINUTES,
     };
     this.jobs.set(id, job);
     this.persistJob(job);
@@ -698,6 +750,7 @@ export class JobManager {
     let workDir: string | undefined = isResume ? job.workDir : undefined;
     let sleepRequested = false;
     let tokenRotationRequested = false;
+    let budgetKillStarted = false;
 
     try {
       if (!isResume) {
@@ -818,6 +871,25 @@ export class JobManager {
         this.kills.set(job.id, () => agentProc.kill());
         job.stdinStream = null;
 
+        // --- Wall-clock timeout timer ---
+        const timeoutMinutes = job.timeoutMinutes ?? DEFAULT_TIMEOUT_MINUTES;
+        if (timeoutMinutes > 0) {
+          const timeoutMs = timeoutMinutes * 60 * 1000;
+          const timeoutTimer = setTimeout(() => {
+            this.timeoutTimers.delete(job.id);
+            logger.warn(`[cc-agent:timeout] Job exceeded ${timeoutMinutes}m wall clock limit — terminating`, { id: job.id });
+            this.addOutput(job, `[cc-agent:timeout] Job exceeded ${timeoutMinutes}m wall clock limit — terminating`);
+            job.timedOut = true;
+            job.failReason = "timeout";
+            this.persistJob(job);
+            terminateGracefully(agentProc, "job termination requested").catch(() => {
+              try { agentProc.kill(); } catch { /* already dead */ }
+            });
+          }, timeoutMs);
+          timeoutTimer.unref();
+          this.timeoutTimers.set(job.id, timeoutTimer);
+        }
+
         // --- Signal key polling (cancel/wake) and input polling ---
         const redis = getRedis();
         let signalPoller: ReturnType<typeof setInterval> | null = null;
@@ -877,6 +949,7 @@ export class JobManager {
           }
         });
 
+        let budgetWarned = false;
         agentProc.on("usage", (u: DriverUsageEvent) => {
           job.totalInputTokens = (job.totalInputTokens ?? 0) + u.inputTokens;
           job.totalOutputTokens = (job.totalOutputTokens ?? 0) + u.outputTokens;
@@ -884,6 +957,24 @@ export class JobManager {
           job.totalCacheWriteTokens = (job.totalCacheWriteTokens ?? 0) + (u.cacheWriteTokens ?? 0);
           job.costUsd = u.costUsd != null ? u.costUsd : calculateCost(job);
           this.persistJob(job);
+
+          const maxBudget = job.maxBudgetUsd ?? 20;
+          const cost = job.costUsd ?? 0;
+          if (!budgetWarned && cost >= maxBudget * 0.9) {
+            budgetWarned = true;
+            logger.warn(`[cc-agent:budget] Job at 90% of $${maxBudget} budget`, { id: job.id, costUsd: cost });
+            this.addOutput(job, `[cc-agent:budget] Job at 90% of $${maxBudget} budget`);
+          }
+          if (!budgetKillStarted && cost >= maxBudget) {
+            budgetKillStarted = true;
+            logger.warn(`[cc-agent:budget] Budget $${maxBudget} exceeded — terminating`, { id: job.id, costUsd: cost });
+            this.addOutput(job, `[cc-agent:budget] Budget $${maxBudget} exceeded — terminating`);
+            job.failReason = "budget_exceeded";
+            this.persistJob(job);
+            terminateGracefully(agentProc, "budget exceeded — please save any work in progress and exit cleanly").catch(() => {
+              try { agentProc.kill(); } catch { /* already dead */ }
+            });
+          }
         });
 
         agentProc.on("text", (text: string) => {
@@ -932,6 +1023,9 @@ export class JobManager {
         });
 
         agentProc.on("exit", (code: number | null) => {
+          // Clear wall-clock timeout timer — job has exited, timer is no longer needed
+          const t = this.timeoutTimers.get(job.id);
+          if (t) { clearTimeout(t); this.timeoutTimers.delete(job.id); }
           stopPollers();
           job.exitCode = code ?? undefined;
           job.stdinStream = null;
@@ -1046,8 +1140,13 @@ export class JobManager {
           job.scoreSource = source;
         }
         job.status = "failed";
-        job.error = String(err);
-        logger.error("job:failed", { id: job.id, error: job.error });
+        // Use failReason-derived message when available (timeout/budget) for clarity
+        job.error = job.failReason === "timeout"
+          ? `Timeout: exceeded ${job.timeoutMinutes ?? DEFAULT_TIMEOUT_MINUTES}m wall-clock limit`
+          : job.failReason === "budget_exceeded"
+          ? `Budget $${job.maxBudgetUsd ?? 20} exceeded`
+          : String(err);
+        logger.error("job:failed", { id: job.id, error: job.error, failReason: job.failReason });
         this.addOutput(job, `[cc-agent] FAILED: ${job.error}`);
         this.persistJob(job);
         this.publishJobEvent(job);
@@ -1363,6 +1462,13 @@ export class JobManager {
     if (timer) {
       clearTimeout(timer);
       this.wakeTimers.delete(id);
+    }
+
+    // Clear wall-clock timeout timer if running
+    const timeoutTimer = this.timeoutTimers.get(id);
+    if (timeoutTimer) {
+      clearTimeout(timeoutTimer);
+      this.timeoutTimers.delete(id);
     }
 
     // Clear approval poller if pending_approval
