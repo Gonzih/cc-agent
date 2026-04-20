@@ -1,45 +1,37 @@
-# Plan: Preamble Observability + Task Scope Warning + Context Overflow Retry
+# Plan: Built-in Job Profiles
 
 ## Task Restatement
-Add three focused reliability improvements to cc-agent:
-1. Log the injected preamble to job output; add `custom_preamble` and `no_preamble` opts to spawn_agent MCP
-2. Emit a warning when a task is large (>800 chars) and not decomposed via create_plan
-3. Auto-retry once when a non-zero exit is accompanied by context-overflow signals in output
+Add 7 pre-seeded profile templates that are auto-created on startup if they don't already exist.
+Users start with useful defaults (fix-issue, implement-feature, write-tests, security-audit, refactor, review-pr, bump-deps).
+Seeding is idempotent — existing custom profiles with the same name are never overwritten.
+`list_profiles` shows a `[builtin]` tag for built-in profiles.
 
 ## Approach
-Minimal, surgical edits across 5 files. No new files needed. All backward compatible.
 
-### Change 1 – Preamble observability
-- `preamble.ts`: add optional `noPreamble` param to `injectPreamble(task, custom?, noPreamble?)`  
-  — returns raw task when `noPreamble=true`
-- `types.ts`: add `noPreamble?: boolean` to `SpawnOptions` and `Job`
-- `store.ts`: add `noPreamble?: boolean` to `JobRecord`
-- `agent.ts` (`toRecord`/`fromRecord`): thread new field through
-- `agent.ts` (`run()`): before spawning driver, compute effective preamble, log first 100 chars as  
-  `[cc-agent:preamble] <snippet>...`, then pass full preamble+task to driver
-- `index.ts`: add `custom_preamble` and `no_preamble` params to spawn_agent tool schema + handler
+**Option A — Seed at startup (chosen)**
+- Create `src/seeds.ts` with `BUILTIN_PROFILES` constant and `seedBuiltinProfiles(profileStore)`
+- Call it in `src/index.ts` startup block (after `initRedis`, before server.connect)
+- Add `builtin?: boolean` to `Profile` interface
+- Idempotency: `getProfile(name)` check before each `saveProfile` — only create if null
+- `list_profiles` output already maps profile fields; add `builtin` to the mapped shape
 
-### Change 2 – Task scope warning
-- `agent.ts` (`spawn()`): after job object is created, check `opts.task.length > 800`; if so emit  
-  `[cc-agent:warn] Task is large (N chars). Consider using create_plan ...` to job output
+**Option B — Separate `seed_profiles` MCP command**
+- User must call it explicitly — bad UX, violates spec requirement ("auto-seed on first run")
 
-### Change 3 – Context overflow retry
-- `agent.ts`: add `CONTEXT_OVERFLOW_PATTERNS` regex array
-- `types.ts`: add `retryCount?: number` to `Job`; `store.ts` `JobRecord` likewise
-- `agent.ts` (`run()`): add `contextOverflowRetryRequested` flag; in `exit` handler, when code≠0  
-  and `(job.retryCount ?? 0) < 1` and overflow detected → set flag + resolve instead of reject;  
-  after Promise, if flag set: log retry message, increment `retryCount`, call `run()` again with  
-  `job.continueSession = false`
+**Option C — Bake profiles into the disk file at install time**
+- Won't work for Redis-backed installs; harder to version
+
+Going with Option A.
 
 ## Files to Touch
-- `src/preamble.ts` — noPreamble support
-- `src/types.ts` — new fields on Job + SpawnOptions
-- `src/store.ts` — new fields on JobRecord
-- `src/agent.ts` — preamble log, scope warning, overflow retry, toRecord/fromRecord
-- `src/index.ts` — MCP schema + handler for custom_preamble, no_preamble
-- `src/agent.test.ts` — tests for all 3 changes
+- MOD: `src/store.ts` — add `builtin?: boolean` to `Profile`
+- NEW: `src/seeds.ts` — `BUILTIN_PROFILES` + `seedBuiltinProfiles()`
+- MOD: `src/index.ts` — call `seedBuiltinProfiles(profileStore)` at startup; update `list_profiles`
+- NEW: `src/seeds.test.ts` — tests for seeding
+- MOD: `PLAN.md`, `TODO.md`
 
 ## Risks
-- `noPreamble` must not affect existing behavior when not set (default path unchanged)
-- Retry must not loop infinitely: `retryCount` gate enforces max 1 auto-retry
-- Overflow detection is heuristic; false positives just cause one extra run (harmless)
+- Redis-backed installs: `getProfile` hits Redis, so idempotency check works correctly
+- Disk-backed installs: `getProfile` reads profiles.json, same check applies
+- `builtin: true` stored in JSON — survives Redis TTL-less storage (profiles have no TTL)
+- Tests: seeds.test.ts can use in-memory ProfileStore directly (no Redis mock needed)
