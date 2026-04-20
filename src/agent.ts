@@ -5,7 +5,8 @@ import { tmpdir, homedir } from "os";
 import { join } from "path";
 import { promisify } from "util";
 import { v4 as uuidv4 } from "uuid";
-import { runClaude } from "./claude.js";
+import { getDriver } from "./drivers/index.js";
+import type { UsageEvent as DriverUsageEvent } from "./drivers/types.js";
 import { injectPreamble, BROWSER_HINT, CODE_QUALITY_CHECKLIST, isCodeTask } from "./preamble.js";
 import type { Job, JobSummary, SpawnOptions, JobEvent, CoordinatorPlan } from "./types.js";
 import { ensureStateDirs, isPidAlive } from "./state.js";
@@ -71,12 +72,6 @@ export function shouldSkipDocker(job: Pick<Job, "repoUrl" | "task"> & { requires
 
   return false;
 }
-
-// Claude Sonnet 4.6 pricing (USD per 1M tokens)
-const PRICE_INPUT = 3.00;
-const PRICE_OUTPUT = 15.00;
-const PRICE_CACHE_READ = 0.30;
-const PRICE_CACHE_WRITE = 3.75;
 
 const LIMIT_PATTERNS = [
   /you'?ve hit your (usage )?limit/i,
@@ -201,13 +196,13 @@ export function extractScore(output: string[]): { score: number; source: "self_r
 }
 
 function calculateCost(job: Job): number {
-  const cost =
-    ((job.totalInputTokens ?? 0) * PRICE_INPUT +
-      (job.totalOutputTokens ?? 0) * PRICE_OUTPUT +
-      (job.totalCacheReadTokens ?? 0) * PRICE_CACHE_READ +
-      (job.totalCacheWriteTokens ?? 0) * PRICE_CACHE_WRITE) /
-    1_000_000;
-  return Math.round(cost * 10000) / 10000;
+  const driver = getDriver(job.agentDriver ?? "claude");
+  return driver.estimateCost({
+    inputTokens: job.totalInputTokens ?? 0,
+    outputTokens: job.totalOutputTokens ?? 0,
+    cacheReadTokens: job.totalCacheReadTokens ?? 0,
+    cacheWriteTokens: job.totalCacheWriteTokens ?? 0,
+  }, job.model ?? job.agentModel);
 }
 
 function toRecord(job: Job): JobRecord {
@@ -249,6 +244,8 @@ function toRecord(job: Job): JobRecord {
     interruptedAt: job.interruptedAt?.toISOString(),
     tokenIndex: job.tokenIndex,
     onComplete: job.onComplete,
+    agentDriver: job.agentDriver,
+    agentModel: job.agentModel,
   };
 }
 
@@ -290,6 +287,8 @@ function fromRecord(r: JobRecord): Job {
     interruptedAt: r.interruptedAt ? new Date(r.interruptedAt) : undefined,
     tokenIndex: r.tokenIndex,
     onComplete: r.onComplete,
+    agentDriver: r.agentDriver ?? "claude",
+    agentModel: r.agentModel,
   };
 }
 
@@ -550,6 +549,8 @@ export class JobManager {
       siblings: opts.siblings,
       resumedFrom: opts.resumedFrom,
       onComplete: opts.onComplete,
+      agentDriver: opts.agentDriver ?? "claude",
+      agentModel: opts.agentModel,
     };
     this.jobs.set(id, job);
     this.persistJob(job);
@@ -743,32 +744,46 @@ export class JobManager {
         logger.info("job:cc-agent-notes-injected", { id: job.id, bytes: content.length });
       }
 
-      // 4. Run Claude
+      // 4. Run agent via driver
       job.status = "running";
       this.persistJob(job);
       this.publishJobEvent(job);
-      logger.info("job:running", { id: job.id, isResume });
+      const driverName = job.agentDriver ?? "claude";
+      logger.info("job:running", { id: job.id, isResume, driver: driverName });
       this.addOutput(job, isResume
-        ? `[cc-agent] Resuming Claude after sleep...`
-        : `[cc-agent] Starting Claude with task...`);
+        ? `[cc-agent] Resuming agent after sleep...`
+        : `[cc-agent] Starting agent (${driverName}) with task...`);
+
+      const driver = getDriver(driverName);
+
+      // Build env passthrough for driver-specific configuration
+      const driverEnv: Record<string, string> = {};
+      if (job.ollamaModel) {
+        driverEnv.CC_DRIVER_OLLAMA_MODEL = job.ollamaModel;
+        driverEnv.CC_DRIVER_OLLAMA_HOST = job.ollamaHost ?? "http://localhost:11434";
+      }
+      if (job.openaiBaseUrl) driverEnv.OPENAI_BASE_URL = job.openaiBaseUrl;
+      if (job.openaiApiKey)  driverEnv.OPENAI_API_KEY  = job.openaiApiKey;
 
       await new Promise<void>((resolve, reject) => {
-        const proc = runClaude(injectPreamble(job.task + repoContext, job.preamble), workDir!, token, {
-          continueSession: isResume || job.continueSession,
-          maxBudgetUsd: job.maxBudgetUsd,
+        const agentProc = driver.spawn({
+          cwd: workDir!,
+          task: injectPreamble(job.task + repoContext, job.preamble),
+          budgetUsd: job.maxBudgetUsd ?? 20,
+          token,
+          continueSession: isResume || !!job.continueSession,
           sessionId: job.sessionId,
-          model: job.model,
-          ollamaModel: job.ollamaModel,
-          ollamaHost: job.ollamaHost,
+          model: job.model ?? job.agentModel,
+          env: Object.keys(driverEnv).length > 0 ? driverEnv : undefined,
         });
 
-        if (proc.pid != null) {
-          job.pid = proc.pid;
+        if (agentProc.pid != null) {
+          job.pid = agentProc.pid;
           this.persistJob(job);
         }
 
-        this.kills.set(job.id, () => proc.kill());
-        job.stdinStream = proc.stdin ?? null;
+        this.kills.set(job.id, () => agentProc.kill());
+        job.stdinStream = null;
 
         // --- Signal key polling (cancel/wake) and input polling ---
         const redis = getRedis();
@@ -780,7 +795,7 @@ export class JobManager {
         };
 
         if (redis) {
-          // Fix 2: Poll cca:job:{id}:signal every 4s for cancel/wake
+          // Poll cca:job:{id}:signal every 4s for cancel/wake
           signalPoller = setInterval(async () => {
             try {
               const sig = await redis.get(`cca:job:${job.id}:signal`);
@@ -793,17 +808,17 @@ export class JobManager {
                 this.addOutput(job, '[cc-agent] Cancelled via signal key.');
                 this.persistJob(job);
                 this.publishJobEvent(job);
-                proc.kill();
+                agentProc.kill();
               }
               // 'wake' signal is only relevant when sleeping; ignore here
             } catch { /* ignore polling errors */ }
           }, 4000);
           (signalPoller as NodeJS.Timeout).unref();
 
-          // Fix 4: Poll cca:job:{id}:input every 3s for in-flight messages
+          // Poll cca:job:{id}:input every 3s for in-flight messages
           inputPoller = setInterval(async () => {
             try {
-              if (!proc.stdin || proc.stdin.destroyed) return;
+              if (!agentProc.writeStdin) return;
               const raw = await redis.rpop(`cca:job:${job.id}:input`);
               if (raw) {
                 let content: string;
@@ -813,7 +828,7 @@ export class JobManager {
                 } catch {
                   content = raw;
                 }
-                proc.stdin.write(`\n<Human>\n${content}\n`);
+                agentProc.writeStdin(`\n<Human>\n${content}\n`);
                 this.addOutput(job, `[cc-agent] Injected input from Redis queue.`);
               }
             } catch { /* ignore polling errors */ }
@@ -822,14 +837,14 @@ export class JobManager {
         }
         // ----------------------------------------------------------
 
-        proc.on("session", (sid: string) => {
+        agentProc.on("sessionId", (sid: string) => {
           if (!job.sessionIdAfter) {
             job.sessionIdAfter = sid;
             this.persistJob(job);
           }
         });
 
-        proc.on("usage", (u) => {
+        agentProc.on("usage", (u: DriverUsageEvent) => {
           job.totalInputTokens = (job.totalInputTokens ?? 0) + u.inputTokens;
           job.totalOutputTokens = (job.totalOutputTokens ?? 0) + u.outputTokens;
           job.totalCacheReadTokens = (job.totalCacheReadTokens ?? 0) + (u.cacheReadTokens ?? 0);
@@ -838,7 +853,7 @@ export class JobManager {
           this.persistJob(job);
         });
 
-        proc.on("text", (text) => {
+        agentProc.on("text", (text: string) => {
           if (text.trim()) this.addOutput(job, text);
           // Detect usage/rate limit messages — try rotating token first, then sleep
           if (!sleepRequested && !tokenRotationRequested && job.output.length > 3 && isLimitMessage(text)) {
@@ -856,7 +871,7 @@ export class JobManager {
                 this.addOutput(job, `[cc-agent] Token ${status.index}/${status.total} exhausted, rotating to next`);
                 job.tokenIndex = status.index;
                 this.persistJob(job);
-                proc.kill();
+                agentProc.kill();
               } else {
                 sleepRequested = true;
                 const wakeAt = parseResetTime(text);
@@ -867,34 +882,32 @@ export class JobManager {
                 this.publishJobEvent(job);
                 logger.warn("job:sleeping", { id: job.id, sleepUntil: job.sleepUntil, triggeringText: text.trim().slice(0, 500) });
                 this.addOutput(job, `[cc-agent] All tokens exhausted. Sleeping until ${job.sleepUntil}`);
-                proc.kill();
+                agentProc.kill();
               }
             })().catch(() => {
               // Fallback: sleep as before
               sleepRequested = true;
-              proc.kill();
+              agentProc.kill();
             });
           }
         });
 
-        proc.on("tool", (name: string) => {
+        agentProc.on("tool", (name: string) => {
           job.toolCalls.push(name);
           if (job.toolCalls.length > 50) job.toolCalls = job.toolCalls.slice(-50);
           this.addOutput(job, `[tool] ${name}`);
         });
 
-        proc.on("error", (err) => { reject(err); });
-
-        proc.on("exit", (code) => {
+        agentProc.on("exit", (code: number | null) => {
           stopPollers();
           job.exitCode = code ?? undefined;
           job.stdinStream = null;
           this.kills.delete(job.id);
-          // Resolve on sleep/rotation (we killed the proc intentionally) or clean exit
+          // Resolve on sleep/rotation (we killed the agent intentionally) or clean exit
           if (sleepRequested || tokenRotationRequested || code === 0 || code === null) resolve();
           // Cancelled via signal key — resolve cleanly (job already marked cancelled)
           else if (job.status === 'cancelled') resolve();
-          else reject(new Error(`Claude exited with code ${code}`));
+          else reject(new Error(`Agent (${driverName}) exited with code ${code}`));
         });
       });
 

@@ -24,6 +24,7 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { JobManager, repoKey, normalizeRepoUrl } from "./agent.js";
+import { listDrivers, getDriverStatus } from "./drivers/index.js";
 import { MetaAgentManager } from "./meta-agent.js";
 import { buildEvaluatorTask } from "./evaluator.js";
 import { loadProfiles, upsertProfile, deleteProfile, getProfile, interpolate } from "./profiles.js";
@@ -161,6 +162,26 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "number",
             description:
               "Timeout for the smoke test in seconds (default 60). Only used when smoke_test is set.",
+          },
+          agent_driver: {
+            type: "string",
+            description:
+              "Which agent driver to use. One of: claude (default), aider, openai, qwen, kimi, deepseek, pi. Defaults to 'claude' (Claude Code).",
+          },
+          agent_model: {
+            type: "string",
+            description:
+              "Model override for the selected driver (e.g. 'qwen2.5-72b-instruct', 'kimi-k2', 'gpt-4o'). Optional.",
+          },
+          openai_base_url: {
+            type: "string",
+            description:
+              "Base URL for OpenAI-compatible API endpoint. Only used when agent_driver is openai/qwen/kimi/deepseek/pi.",
+          },
+          openai_api_key: {
+            type: "string",
+            description:
+              "API key override for OpenAI-compatible drivers. Falls back to OPENAI_API_KEY / driver-specific env var.",
           },
           coordinator_plan: {
             type: "object",
@@ -667,6 +688,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["namespace"],
       },
     },
+    {
+      name: "list_drivers",
+      description: "List all available agent drivers and their status (binary found / API key configured). Use this to check which drivers are ready to use before calling spawn_agent with agent_driver.",
+      inputSchema: { type: "object", properties: {} },
+    },
   ],
 }));
 
@@ -699,6 +725,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         smokeTest: a.smoke_test as string | undefined,
         smokeTestTimeout: a.smoke_test_timeout as number | undefined,
         requiresApproval: !isTrusted,
+        agentDriver: a.agent_driver as string | undefined,
+        agentModel: a.agent_model as string | undefined,
+        openaiBaseUrl: a.openai_base_url as string | undefined,
+        openaiApiKey: a.openai_api_key as string | undefined,
       });
 
       if (a.coordinator_plan) {
@@ -1538,6 +1568,21 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           }],
         };
       }
+    }
+
+    case "list_drivers": {
+      logger.info("tool:list_drivers");
+      const drivers = getDriverStatus();
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            drivers,
+            valid_names: listDrivers(),
+            usage: "Pass agent_driver to spawn_agent to use a specific driver (default: 'claude')",
+          }),
+        }],
+      };
     }
 
     default:

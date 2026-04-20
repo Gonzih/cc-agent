@@ -83,6 +83,10 @@ export interface Job {
   resumedFrom?: string;        // job ID this was auto-spawned to resume after interruption
   tokenIndex?: number;         // which token index was active when job ran
   onComplete?: OnComplete;     // spawn a follow-up job when this one finishes with status=done
+  agentDriver?: string;        // which driver to use (default: 'claude')
+  agentModel?: string;         // model override passed to the driver
+  openaiBaseUrl?: string;      // base URL for OpenAI-compatible drivers
+  openaiApiKey?: string;       // API key override for OpenAI-compatible drivers
 }
 
 export interface SpawnOptions {
@@ -109,6 +113,10 @@ export interface SpawnOptions {
   requiresDocker?: boolean;
   resumedFrom?: string;
   onComplete?: OnComplete;     // spawn a follow-up job when this one finishes with status=done
+  agentDriver?: string;        // which driver to use (default: 'claude')
+  agentModel?: string;         // model override passed to the driver
+  openaiBaseUrl?: string;      // base URL for OpenAI-compatible drivers
+  openaiApiKey?: string;       // API key override for OpenAI-compatible drivers
 }
 
 export interface JobSummary {
