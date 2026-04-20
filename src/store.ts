@@ -74,6 +74,8 @@ export interface JobRecord {
   onComplete?: OnComplete;
   agentDriver?: string;
   agentModel?: string;
+  noPreamble?: boolean;
+  retryCount?: number;
 }
 
 export class JobStore {

@@ -7,7 +7,7 @@ import { promisify } from "util";
 import { v4 as uuidv4 } from "uuid";
 import { getDriver } from "./drivers/index.js";
 import type { UsageEvent as DriverUsageEvent } from "./drivers/types.js";
-import { injectPreamble, BROWSER_HINT, CODE_QUALITY_CHECKLIST, isCodeTask } from "./preamble.js";
+import { injectPreamble, getPreambleText, BROWSER_HINT, CODE_QUALITY_CHECKLIST, isCodeTask } from "./preamble.js";
 import type { Job, JobSummary, SpawnOptions, JobEvent, CoordinatorPlan } from "./types.js";
 import { ensureStateDirs, isPidAlive } from "./state.js";
 import { jobStore, learningsStore, type JobRecord } from "./store.js";
@@ -82,6 +82,19 @@ const LIMIT_PATTERNS = [
 
 function isLimitMessage(text: string): boolean {
   return LIMIT_PATTERNS.some((p) => p.test(text));
+}
+
+const CONTEXT_OVERFLOW_PATTERNS = [
+  /context length/i,
+  /context window/i,
+  /too many tokens/i,
+  /maximum context/i,
+  /token limit/i,
+];
+
+function isContextOverflow(outputLines: string[]): boolean {
+  const tail = outputLines.slice(-50).join("\n");
+  return CONTEXT_OVERFLOW_PATTERNS.some((p) => p.test(tail));
 }
 
 /** Parse a reset timestamp from limit messages like "resets 2pm (America/Los_Angeles)". */
@@ -246,6 +259,8 @@ function toRecord(job: Job): JobRecord {
     onComplete: job.onComplete,
     agentDriver: job.agentDriver,
     agentModel: job.agentModel,
+    noPreamble: job.noPreamble,
+    retryCount: job.retryCount,
   };
 }
 
@@ -289,6 +304,8 @@ function fromRecord(r: JobRecord): Job {
     onComplete: r.onComplete,
     agentDriver: r.agentDriver ?? "claude",
     agentModel: r.agentModel,
+    noPreamble: r.noPreamble,
+    retryCount: r.retryCount ?? 0,
   };
 }
 
@@ -551,10 +568,17 @@ export class JobManager {
       onComplete: opts.onComplete,
       agentDriver: opts.agentDriver ?? "claude",
       agentModel: opts.agentModel,
+      noPreamble: opts.noPreamble,
+      retryCount: 0,
     };
     this.jobs.set(id, job);
     this.persistJob(job);
     logger.info("job:spawned", { id, status: job.status, repoUrl: opts.repoUrl });
+
+    // Warn if the raw task is large — user may want to decompose it via create_plan
+    if (opts.task.length > 800) {
+      this.addOutput(job, `[cc-agent:warn] Task is large (${opts.task.length} chars). Consider using create_plan to decompose into atomic steps for more reliable execution.`);
+    }
 
     if (!isPending && !requiresApproval) {
       const effectiveToken = (opts.claudeToken ?? await getCurrentToken()) || this.defaultToken;
@@ -765,10 +789,19 @@ export class JobManager {
       if (job.openaiBaseUrl) driverEnv.OPENAI_BASE_URL = job.openaiBaseUrl;
       if (job.openaiApiKey)  driverEnv.OPENAI_API_KEY  = job.openaiApiKey;
 
+      // Log the preamble being injected (first 100 chars for observability)
+      const effectivePreamble = getPreambleText(job.preamble, job.noPreamble);
+      if (effectivePreamble) {
+        const snippet = effectivePreamble.slice(0, 100).replace(/\n/g, " ");
+        this.addOutput(job, `[cc-agent:preamble] ${snippet}...`);
+      }
+
+      let contextOverflowRetryRequested = false;
+
       await new Promise<void>((resolve, reject) => {
         const agentProc = driver.spawn({
           cwd: workDir!,
-          task: injectPreamble(job.task + repoContext, job.preamble),
+          task: injectPreamble(job.task + repoContext, job.preamble, job.noPreamble),
           budgetUsd: job.maxBudgetUsd ?? 20,
           token,
           continueSession: isResume || !!job.continueSession,
@@ -907,9 +940,27 @@ export class JobManager {
           if (sleepRequested || tokenRotationRequested || code === 0 || code === null) resolve();
           // Cancelled via signal key — resolve cleanly (job already marked cancelled)
           else if (job.status === 'cancelled') resolve();
-          else reject(new Error(`Agent (${driverName}) exited with code ${code}`));
+          // Context overflow auto-retry: resolve so we can re-run with fresh context
+          else if ((job.retryCount ?? 0) < 1 && isContextOverflow(job.output)) {
+            contextOverflowRetryRequested = true;
+            resolve();
+          } else {
+            reject(new Error(`Agent (${driverName}) exited with code ${code}`));
+          }
         });
       });
+
+      if (contextOverflowRetryRequested) {
+        job.retryCount = (job.retryCount ?? 0) + 1;
+        const savedContinueSession = job.continueSession;
+        job.continueSession = false;
+        this.addOutput(job, `[cc-agent:retry] Context overflow detected — retrying with fresh context`);
+        logger.info("job:context-overflow-retry", { id: job.id, retryCount: job.retryCount });
+        this.persistJob(job);
+        await this.run(job, token);
+        job.continueSession = savedContinueSession;
+        return;
+      }
 
       if (tokenRotationRequested) {
         // Immediately re-run with the newly rotated token (no sleep)
@@ -1041,7 +1092,7 @@ export class JobManager {
         const proc = runDockerAgent({
           containerName,
           repoUrl: job.repoUrl,
-          task: injectPreamble(DOCKER_PREAMBLE + job.task, job.preamble),
+          task: injectPreamble(DOCKER_PREAMBLE + job.task, job.preamble, job.noPreamble),
           anthropicToken: token,
           githubToken,
           namespace,
