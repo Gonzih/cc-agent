@@ -183,6 +183,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             description:
               "API key override for OpenAI-compatible drivers. Falls back to OPENAI_API_KEY / driver-specific env var.",
           },
+          custom_preamble: {
+            type: "string",
+            description:
+              "Custom workflow preamble to inject before the task. If set, replaces the default cc-agent workflow preamble entirely. Use no_preamble to remove the preamble completely.",
+          },
+          no_preamble: {
+            type: "boolean",
+            description:
+              "If true, no preamble is injected — the raw task is passed directly to the agent. Overrides custom_preamble.",
+          },
           coordinator_plan: {
             type: "object",
             description: "Optional plan for cc-tg coordinator. If set, cc-tg will spawn the nextStep when this job completes.",
@@ -729,6 +739,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         agentModel: a.agent_model as string | undefined,
         openaiBaseUrl: a.openai_base_url as string | undefined,
         openaiApiKey: a.openai_api_key as string | undefined,
+        preamble: a.custom_preamble as string | undefined,
+        noPreamble: a.no_preamble === true,
       });
 
       if (a.coordinator_plan) {

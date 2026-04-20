@@ -111,11 +111,18 @@ export function isComplexTask(task: string): boolean {
   return COMPLEX_TASK_PATTERN.test(task) && task.length > 100;
 }
 
-export function injectPreamble(task: string, customPreamble?: string): string {
+export function injectPreamble(task: string, customPreamble?: string, noPreamble?: boolean): string {
+  if (noPreamble) return task;
   const preamble = customPreamble ?? DEFAULT_PREAMBLE;
   let injected = preamble + task;
   if (isComplexTask(task)) {
     injected += `\n\n> **Planning reminder:** This looks like a complex task. Write PLAN.md and TODO.md before writing any code.\n`;
   }
   return injected;
+}
+
+/** Return just the preamble text that would be prepended (for logging). */
+export function getPreambleText(customPreamble?: string, noPreamble?: boolean): string {
+  if (noPreamble) return "";
+  return customPreamble ?? DEFAULT_PREAMBLE;
 }

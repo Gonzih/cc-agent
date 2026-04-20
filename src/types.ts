@@ -87,6 +87,8 @@ export interface Job {
   agentModel?: string;         // model override passed to the driver
   openaiBaseUrl?: string;      // base URL for OpenAI-compatible drivers
   openaiApiKey?: string;       // API key override for OpenAI-compatible drivers
+  noPreamble?: boolean;        // if true, no preamble injected — raw task passed directly
+  retryCount?: number;         // auto-retry counter (max 1 context-overflow retry)
 }
 
 export interface SpawnOptions {
@@ -117,6 +119,7 @@ export interface SpawnOptions {
   agentModel?: string;         // model override passed to the driver
   openaiBaseUrl?: string;      // base URL for OpenAI-compatible drivers
   openaiApiKey?: string;       // API key override for OpenAI-compatible drivers
+  noPreamble?: boolean;        // if true, no preamble injected — raw task passed directly
 }
 
 export interface JobSummary {
