@@ -169,6 +169,10 @@ export class MetaAgentManager {
 
     await this.saveState(state);
 
+    // Drain stale input queue if any (legacy key, no longer used by tool handler)
+    const redis = getRedis();
+    if (redis) await redis.del(this.inputKey(namespace)).catch(() => {});
+
     this.liveStatus.set(namespace, {
       isTyping: false,
       turnCount: 0,
@@ -187,6 +191,16 @@ export class MetaAgentManager {
   async messageMetaAgent(namespace: string, message: string, repoUrl?: string): Promise<void> {
     const redis = getRedis();
     if (!redis) throw new Error("Redis not available");
+
+    // Guard against concurrent calls for the same namespace.
+    if (this.activeProcesses.has(namespace)) {
+      const existing = this.activeProcesses.get(namespace)!;
+      if (!existing.killed) {
+        throw new Error(`Meta-agent for namespace '${namespace}' is already processing a message. Wait for it to finish.`);
+      }
+      // Process exited but wasn't cleaned up — remove stale entry.
+      this.activeProcesses.delete(namespace);
+    }
 
     // Ensure workspace and state exist.
     let state = await this.getState(namespace);

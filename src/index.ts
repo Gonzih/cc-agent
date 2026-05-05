@@ -678,7 +678,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "message_meta_agent",
-      description: "Send a message to a running meta-agent session. Enqueues to cca:meta:{namespace}:input (LPUSH). The meta-agent polls this every 3s and writes messages to Claude stdin.",
+      description: "Send a message to a running meta-agent session. Spawns a claude -p process in the meta-agent workspace with --continue if a prior session exists. Responses are published line-by-line to cca:chat:outgoing:{namespace}.",
       inputSchema: {
         type: "object",
         properties: {
