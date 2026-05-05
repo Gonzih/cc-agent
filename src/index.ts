@@ -88,7 +88,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "spawn_agent",
       description:
-        "Spawn a Claude Code agent on a GitHub repository.\n\nWORKFLOW: agent clones repo → creates its own branch → implements → tests → commits → pushes → opens PR → merges PR → publishes.\n\nIMPORTANT: Always set create_branch: false. The agent creates its own branch internally with `git checkout -b`. Setting create_branch: true will cause a clone failure because the branch doesn't exist on remote yet.\n\nParameters:\n- repo_url: GitHub repo URL (https://github.com/owner/repo)\n- task: Full task description. A workflow preamble is auto-injected before your task.\n- create_branch: ALWAYS false. The agent manages its own branch.\n- branch: Branch name hint passed to agent (agent will create it with git checkout -b)\n- claude_token: Optional Claude API token override",
+        "Spawn a Claude Code agent on a GitHub repository.\n\nWORKFLOW: agent clones repo → creates its own branch → implements → tests → commits → pushes → opens PR → merges PR → publishes.\n\nIMPORTANT: Always set create_branch: false. The agent creates its own branch internally with `git checkout -b`. Setting create_branch: true will cause a clone failure because the branch doesn't exist on remote yet.\n\nBRANCH PARAM WARNING: Only pass `branch` for already-existing remote branches (e.g. to resume work on a branch that was previously pushed). For new branches, omit `branch` entirely — include `git checkout -b <name>` in the task steps instead. Passing a branch that does not exist on the remote will cause an immediate clone failure ('fatal: Remote branch not found').\n\nParameters:\n- repo_url: GitHub repo URL (https://github.com/owner/repo)\n- task: Full task description. A workflow preamble is auto-injected before your task.\n- create_branch: ALWAYS false. The agent manages its own branch.\n- branch: Existing remote branch to checkout (see BRANCH PARAM WARNING above)\n- claude_token: Optional Claude API token override",
       inputSchema: {
         type: "object",
         properties: {
@@ -102,7 +102,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           branch: {
             type: "string",
-            description: "Branch name hint passed to the agent (agent will create it with git checkout -b). Optional.",
+            description: "Existing remote branch to checkout after cloning. Only pass this for branches that already exist on the remote. DO NOT pass a new branch name here — it will cause clone failure ('fatal: Remote branch not found'). New branches must be created by the agent via git checkout -b inside the task.",
           },
           create_branch: {
             type: "string",
