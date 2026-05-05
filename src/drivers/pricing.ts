@@ -46,6 +46,21 @@ const PRICING: Record<string, AgentPricing> = {
   "deepseek-v3":                  { inputPer1M: 0.14,  outputPer1M: 0.28 },
   "deepseek-r1":                  { inputPer1M: 0.55,  outputPer1M: 2.19 },
   "deepseek-chat":                { inputPer1M: 0.14,  outputPer1M: 0.28 },
+
+  // ── Gemini models (via Gemini CLI) ────────────────────────────────────────
+  "gemini-2.5-pro":               { inputPer1M: 1.25,  outputPer1M: 10.00 },
+  "gemini-2.5-flash":             { inputPer1M: 0.075, outputPer1M: 0.30 },
+  "gemini-2.5-flash-lite":        { inputPer1M: 0.01,  outputPer1M: 0.04 },
+
+  // ── Amp models (via Amp CLI) ──────────────────────────────────────────────
+  "amp":                          { inputPer1M: 15.00, outputPer1M: 75.00 },
+  "amp-fast":                     { inputPer1M: 0.25,  outputPer1M: 1.25 },
+
+  // ── OpenAI Codex CLI models ───────────────────────────────────────────────
+  "gpt-4.1":                      { inputPer1M: 2.00,  outputPer1M: 8.00 },
+  "gpt-4.1-mini":                 { inputPer1M: 0.40,  outputPer1M: 1.60 },
+  "o3":                           { inputPer1M: 10.00, outputPer1M: 40.00 },
+  "o4-mini":                      { inputPer1M: 1.10,  outputPer1M: 4.40 },
 };
 
 const DEFAULT_PRICING: AgentPricing = { inputPer1M: 1.0, outputPer1M: 3.0 };

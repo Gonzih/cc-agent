@@ -2,15 +2,21 @@ import { existsSync } from "fs";
 import { ClaudeCodeDriver } from "./claude-code.js";
 import { AiderDriver } from "./aider.js";
 import { OpenAICompatibleDriver } from "./openai-compatible.js";
+import { GeminiDriver } from "./gemini.js";
+import { AmpDriver } from "./amp.js";
+import { CodexDriver } from "./codex.js";
 import type { AgentDriver } from "./types.js";
 
 export { ClaudeCodeDriver } from "./claude-code.js";
 export { AiderDriver } from "./aider.js";
 export { OpenAICompatibleDriver } from "./openai-compatible.js";
+export { GeminiDriver } from "./gemini.js";
+export { AmpDriver } from "./amp.js";
+export { CodexDriver } from "./codex.js";
 export type { AgentDriver, AgentProcess, SpawnOptions, UsageEvent, AgentPricing } from "./types.js";
 export { getPricing } from "./pricing.js";
 
-const VALID_DRIVERS = ["claude", "claude-code", "aider", "openai", "openai-compatible", "qwen", "kimi", "deepseek", "pi"] as const;
+const VALID_DRIVERS = ["claude", "claude-code", "aider", "openai", "openai-compatible", "qwen", "kimi", "deepseek", "pi", "gemini", "amp", "codex"] as const;
 export type DriverName = typeof VALID_DRIVERS[number];
 
 /**
@@ -33,6 +39,15 @@ export function getDriver(name: string): AgentDriver {
     case "deepseek":
     case "pi":
       return new OpenAICompatibleDriver(name);
+
+    case "gemini":
+      return new GeminiDriver();
+
+    case "amp":
+      return new AmpDriver();
+
+    case "codex":
+      return new CodexDriver();
 
     default:
       throw new Error(
@@ -94,6 +109,51 @@ export function getDriverStatus(): Array<{ name: string; available: boolean; not
       name,
       available: hasKey,
       note: hasKey ? `${envKey} configured` : `set ${envKey} or OPENAI_API_KEY to enable`,
+    });
+  }
+
+  // Gemini CLI
+  {
+    const d = new GeminiDriver();
+    const bin = d.resolveBinary?.() ?? "gemini";
+    const hasBin = existsSync(bin);
+    const hasKey = !!(process.env.GEMINI_API_KEY);
+    drivers.push({
+      name: "gemini",
+      available: hasBin,
+      note: hasBin
+        ? hasKey ? "binary found, GEMINI_API_KEY configured" : "binary found (no GEMINI_API_KEY — set it to enable)"
+        : "gemini not installed — run: npm install -g @google/gemini-cli",
+    });
+  }
+
+  // Amp CLI
+  {
+    const d = new AmpDriver();
+    const bin = d.resolveBinary?.() ?? "amp";
+    const hasBin = existsSync(bin);
+    const hasKey = !!(process.env.AMP_API_KEY);
+    drivers.push({
+      name: "amp",
+      available: hasBin,
+      note: hasBin
+        ? hasKey ? "binary found, AMP_API_KEY configured" : "binary found (no AMP_API_KEY — set it to enable)"
+        : "amp not installed — run: npm install -g @sourcegraph/amp",
+    });
+  }
+
+  // Codex CLI
+  {
+    const d = new CodexDriver();
+    const bin = d.resolveBinary?.() ?? "codex";
+    const hasBin = existsSync(bin);
+    const hasKey = !!(process.env.OPENAI_API_KEY);
+    drivers.push({
+      name: "codex",
+      available: hasBin,
+      note: hasBin
+        ? hasKey ? "binary found, OPENAI_API_KEY configured" : "binary found (no OPENAI_API_KEY — set it to enable)"
+        : "codex not installed — run: npm install -g @openai/codex",
     });
   }
 
