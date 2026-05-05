@@ -167,7 +167,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           agent_driver: {
             type: "string",
             description:
-              "Which agent driver to use. One of: claude (default), aider, openai, qwen, kimi, deepseek, pi. Defaults to 'claude' (Claude Code).",
+              "Which agent driver to use. One of: claude (default), aider, openai, qwen, kimi, deepseek, pi, gemini, amp, codex. Defaults to 'claude' (Claude Code). gemini requires GEMINI_API_KEY, amp requires AMP_API_KEY, codex requires OPENAI_API_KEY.",
           },
           agent_model: {
             type: "string",
