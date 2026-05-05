@@ -1,46 +1,22 @@
-# Plan: Add Gemini CLI, Amp, and Codex CLI Drivers
+# Plan: Fix meta-agent gaps 5-7
 
 ## Task Restatement
-Add three new AgentDriver implementations to cc-agent:
-1. **Gemini CLI** (`gemini` driver) — Google's Gemini CLI, NDJSON stream-json output, GEMINI_API_KEY
-2. **Amp** (`amp` driver) — Sourcegraph Amp, Claude Code-compatible stream-json output, AMP_API_KEY
-3. **Codex CLI** (`codex` driver) — OpenAI Codex CLI, plain text output, OPENAI_API_KEY
+Three meta-agent architecture gaps need fixing:
+- **Gap 5**: Tool description for `message_meta_agent` is wrong (says LPUSH/poll; reality is direct spawn). Also need to drain stale `cca:meta:{ns}:input` keys on startup.
+- **Gap 6**: Race condition — concurrent `messageMetaAgent()` calls can orphan the first process.
+- **Gap 7**: `publishOutput()` missing log write to `cca:chat:log:{ns}`.
 
-Each driver follows the existing AgentDriver interface in src/drivers/types.ts.
-
-## Approaches Considered
-
-**Option A — New files per driver (chosen)**
-- Create `src/drivers/gemini.ts`, `src/drivers/amp.ts`, `src/drivers/codex.ts`
-- Each is a self-contained class implementing AgentDriver
-- Clean separation; follows existing pattern (aider.ts, claude-code.ts)
-
-**Option B — Extend OpenAICompatibleDriver for Codex**
-- Codex is an OpenAI CLI tool; could piggyback on openai-compatible
-- But Codex is a subprocess (not API), output is plain text — incompatible pattern
-
-**Option C — Single CLIDriver base class**
-- Extract shared subprocess logic into a base class
-- Overkill for 3 drivers; existing code doesn't use this pattern
-
-Going with Option A — matches codebase conventions exactly.
+## Current State (after reading code)
+- `inputKey()` helper — **already exists** (line 60)
+- `logKey()` helper — **already exists** (line 64)
+- `publishOutput()` LPUSH + LTRIM — **already implemented** (lines 385-386) — Gap 7 already done
+- Concurrent guard — **missing** — Gap 6 needs fix
+- Tool description — **wrong** — Gap 5 needs fix
+- Stale key drain — **missing** from `startMetaAgent()` — Gap 5 needs fix
 
 ## Files to Touch
-- NEW: `src/drivers/gemini.ts` — Gemini CLI driver
-- NEW: `src/drivers/amp.ts` — Amp driver (reuses Claude Code stream-json parsing)
-- NEW: `src/drivers/codex.ts` — Codex CLI plain-text driver
-- MOD: `src/drivers/pricing.ts` — add Gemini, Amp, OpenAI Codex models
-- MOD: `src/drivers/index.ts` — register new drivers in VALID_DRIVERS, getDriver, getDriverStatus
-- MOD: `src/index.ts` — update agent_driver param description
+- `src/index.ts` — fix tool description line 681
+- `src/meta-agent.ts` — add concurrent guard + stale key drain
 
-## Key Decisions
-- **Gemini stream-json**: parse NDJSON looking for `type`, `content`, `text`, `usageMetadata` fields; best-effort since schema not fully documented
-- **Amp stream-json**: reuse same NDJSON parsing logic as claude.ts (message_start, message_delta, result, tool_use, etc.) — documented as Claude Code-compatible
-- **Codex plain text**: each stdout line → "text" event; no structured usage
-- **Binary resolution**: follow aider.ts PATH-walk + fallbacks pattern
-- **Env/token**: each driver passes its API key env var, falls back to options.token
-
-## Risks
-- Gemini CLI stream-json schema is undocumented; parser may need updating when real output is observed
-- Amp docs say "Claude Code compatible" but exact compatibility level unknown
-- Codex CLI binary name may vary by install method (npm vs rust binary)
+## Approach
+Minimal targeted edits. No refactoring beyond what is asked.
