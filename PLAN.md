@@ -1,22 +1,20 @@
-# Plan: Fix meta-agent gaps 5-7
+# Plan: Add AMAI brand icon
 
 ## Task Restatement
-Three meta-agent architecture gaps need fixing:
-- **Gap 5**: Tool description for `message_meta_agent` is wrong (says LPUSH/poll; reality is direct spawn). Also need to drain stale `cca:meta:{ns}:input` keys on startup.
-- **Gap 6**: Race condition — concurrent `messageMetaAgent()` calls can orphan the first process.
-- **Gap 7**: `publishOutput()` missing log write to `cca:chat:log:{ns}`.
-
-## Current State (after reading code)
-- `inputKey()` helper — **already exists** (line 60)
-- `logKey()` helper — **already exists** (line 64)
-- `publishOutput()` LPUSH + LTRIM — **already implemented** (lines 385-386) — Gap 7 already done
-- Concurrent guard — **missing** — Gap 6 needs fix
-- Tool description — **wrong** — Gap 5 needs fix
-- Stale key drain — **missing** from `startMetaAgent()` — Gap 5 needs fix
-
-## Files to Touch
-- `src/index.ts` — fix tool description line 681
-- `src/meta-agent.ts` — add concurrent guard + stale key drain
+Add the AMAI money-brain logo PNG to the repo under `assets/logo.png` and display it at the top of README.md using an HTML `<img>` tag.
 
 ## Approach
-Minimal targeted edits. No refactoring beyond what is asked.
+Single straightforward task — no alternatives needed.
+
+1. Create `assets/` directory, copy image in as `logo.png`
+2. Edit README.md to insert `<img src="assets/logo.png" alt="AMAI" width="120">` right after the `# cc-agent` heading
+3. Commit → branch → PR → merge → publish
+
+## Files to Touch
+- `assets/logo.png` (new binary)
+- `README.md` (insert img tag after first heading)
+- `PLAN.md`, `TODO.md` (this run's planning files)
+
+## Risks
+- Binary file must be committed via `git add -A` to include it
+- Image path in README must be relative and match the actual filename exactly
