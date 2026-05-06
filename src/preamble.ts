@@ -30,11 +30,12 @@ For trivial tasks (single-file fixes, typos, config changes): skip planning, go 
 1. You are already on the correct branch (or create one: \`git checkout -b feat/your-feature\`)
 2. Implement the task
 3. Run tests if available (\`npm test\`, \`cargo test\`, \`go test ./...\`, etc.)
-4. \`git add -A && git commit -m "descriptive message"\`
-5. \`git push -u origin <branch>\`
-6. \`gh pr create --title "..." --body "..." --base main\`
-7. \`gh pr merge --squash --auto\`
-8. Publish/release (language-appropriate):
+4. \`git add -A\` then run \`git diff --staged\` — read the full diff, verify every change matches your stated intent. If anything is out of scope, wrong, or missing: fix it before committing. Never assume the output is correct.
+5. \`git commit -m "descriptive message"\`
+6. \`git push -u origin <branch>\`
+7. \`gh pr create --title "..." --body "..." --base main\`
+8. \`gh pr merge --squash --auto\`
+9. Publish/release (language-appropriate):
    - Node/TS: \`npm version patch && npm publish\`
    - Rust: \`cargo publish\`
    - Go: \`git tag vX.Y.Z && git push --tags\`
@@ -44,6 +45,7 @@ For trivial tasks (single-file fixes, typos, config changes): skip planning, go 
 - NEVER use \`create_branch\` parameter — you create your own branch with git checkout
 - Nothing is done until PR is merged AND package is published/deployed
 - If a step fails, fix the root cause — do not skip or bypass
+- **Always review \`git diff --staged\` before committing** — verify the diff matches your stated intent exactly. Out-of-scope changes, regressions, or missing pieces must be fixed before committing. Build passing is not verification.
 - Check off TODO.md items as you complete them — this is your progress tracker
 - Run tests/lint ONLY when you think you're done — never mid-edit
 - If you discover the plan is wrong mid-implementation, update PLAN.md before pivoting
@@ -97,7 +99,7 @@ Scoring guide:
 
 export const BROWSER_HINT = `\n\n## Browser Tool Available\nUse \`$B URL\` to read any live webpage via Playwright (100ms, real Chromium, ARIA refs). Example: \`$B https://github.com/owner/repo\`\n`;
 
-export const CODE_QUALITY_CHECKLIST = `\n\n## Code Quality Checklist (check before submitting PR)\n- [ ] No LLM output used as direct code/shell input without validation\n- [ ] Async operations have error handlers (no unhandled promise rejections)\n- [ ] No secrets/tokens hardcoded — use env vars\n- [ ] Tests added for new logic\n- [ ] Build passes before PR\n`;
+export const CODE_QUALITY_CHECKLIST = `\n\n## Code Quality Checklist (check before submitting PR)\n- [ ] Ran \`git diff --staged\` and confirmed every change matches stated intent\n- [ ] No LLM output used as direct code/shell input without validation\n- [ ] Async operations have error handlers (no unhandled promise rejections)\n- [ ] No secrets/tokens hardcoded — use env vars\n- [ ] Tests added for new logic\n- [ ] Build passes before PR\n`;
 
 const CODE_TASK_PATTERN = /\b(build|implement|add|create|fix)\b/i;
 
