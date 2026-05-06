@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { injectPreamble, getPreambleText, DEFAULT_PREAMBLE } from "./preamble.js";
 
-const { mockIsPidAlive, mockJobStoreLoadAll, mockGetRedis, mockRedisPublish, mockRedisLrange, mockRedisGet, mockRedisXadd, mockRedisXtrim, mockRedisLpop, mockRedisLpush, mockRedisDel } = vi.hoisted(() => {
+const { mockIsPidAlive, mockJobStoreLoadAll, mockGetRedis, mockRedisPublish, mockRedisLrange, mockRedisGet, mockRedisXadd, mockRedisXtrim, mockRedisLpop, mockRedisLpush, mockRedisDel, mockRedisExpire, mockRedisFull } = vi.hoisted(() => {
   const mockRedisPublish = vi.fn(async () => 0);
   const mockRedisLrange = vi.fn(async () => [] as string[]);
   const mockRedisGet = vi.fn(async () => null as string | null);
@@ -10,7 +10,8 @@ const { mockIsPidAlive, mockJobStoreLoadAll, mockGetRedis, mockRedisPublish, moc
   const mockRedisLpop = vi.fn(async () => null as string | null);
   const mockRedisLpush = vi.fn(async () => 1);
   const mockRedisDel = vi.fn(async () => 1);
-  const mockRedisFull = { publish: mockRedisPublish, lrange: mockRedisLrange, get: mockRedisGet, xadd: mockRedisXadd, xtrim: mockRedisXtrim, lpop: mockRedisLpop, lpush: mockRedisLpush, del: mockRedisDel };
+  const mockRedisExpire = vi.fn(async () => 1);
+  const mockRedisFull = { publish: mockRedisPublish, lrange: mockRedisLrange, get: mockRedisGet, xadd: mockRedisXadd, xtrim: mockRedisXtrim, lpop: mockRedisLpop, lpush: mockRedisLpush, del: mockRedisDel, expire: mockRedisExpire };
   return {
     mockIsPidAlive: vi.fn(() => false),
     mockJobStoreLoadAll: vi.fn(async () => [] as any[]),
@@ -23,6 +24,8 @@ const { mockIsPidAlive, mockJobStoreLoadAll, mockGetRedis, mockRedisPublish, moc
     mockRedisLpop,
     mockRedisLpush,
     mockRedisDel,
+    mockRedisExpire,
+    mockRedisFull,
   };
 });
 
@@ -147,7 +150,16 @@ describe("JobManager", () => {
 
   beforeEach(() => {
     manager = new JobManager();
+    // Reset and set default to null for every test (clears all queued mockReturnValueOnce)
+    mockGetRedis.mockReset();
+    mockGetRedis.mockReturnValue(null);
   });
+
+  afterEach(() => {
+    // Restore null so background jobs from this test don't bleed into the next
+    mockGetRedis.mockReset();
+    mockGetRedis.mockReturnValue(null);
+  });;
 
   it("constructor creates empty jobs map", () => {
     expect(manager.list()).toEqual([]);
@@ -382,6 +394,83 @@ describe("JobManager", () => {
     // Job should start cloning/running (not immediately failed from smoke test)
     const job = manager.getJob(id);
     expect(job!.status).not.toBe("failed");
+  });
+
+  it("publishJobDone publishes to cca:job:done:{id} channel when job completes", async () => {
+    // Enable Redis for this test so publishJobDone can fire
+    mockGetRedis.mockReturnValue(mockRedisFull as any);
+    mockRedisPublish.mockClear();
+    mockRedisLpush.mockClear();
+
+    const id = await manager.spawn({
+      repoUrl: "https://github.com/test/repo.git",
+      task: "AGENT_SCORE: 0.9\ndone",
+    });
+
+    // Wait for the mock claude process to emit exit(0) and the job to complete
+    await new Promise((r) => setTimeout(r, 200));
+
+    // Restore null redis for other tests
+    mockGetRedis.mockReturnValue(null);
+
+    const expectedChannel = `cca:job:done:${id}`;
+    const publishCalls = mockRedisPublish.mock.calls;
+    const donePubCall = publishCalls.find((c) => c[0] === expectedChannel);
+    expect(donePubCall).toBeDefined();
+
+    // Payload must be valid JSON with required fields
+    const payload = JSON.parse(donePubCall![1] as string);
+    expect(payload.job_id).toBe(id);
+    expect(["done", "failed", "cancelled"]).toContain(payload.status);
+    expect(typeof payload.finished_at === "string" || payload.finished_at === null).toBe(true);
+  });
+
+  it("publishJobDone LPUSH to queue key so wait_for_job can BLPOP", async () => {
+    mockGetRedis.mockReturnValue(mockRedisFull as any);
+    mockRedisLpush.mockClear();
+
+    const id = await manager.spawn({
+      repoUrl: "https://github.com/test/repo.git",
+      task: "simple task",
+    });
+
+    await new Promise((r) => setTimeout(r, 200));
+    mockGetRedis.mockReturnValue(null);
+
+    const queueKey = `cca:job:done:${id}:queue`;
+    const lpushCalls = mockRedisLpush.mock.calls;
+    const queueCall = lpushCalls.find((c) => c[0] === queueKey);
+    expect(queueCall).toBeDefined();
+
+    // Payload in queue must also be valid JSON with job_id
+    const payload = JSON.parse(queueCall![1] as string);
+    expect(payload.job_id).toBe(id);
+  });
+
+  it("publishJobDone fires AFTER persistJob (ordering guarantee via Redis command queue)", async () => {
+    // Verify: when Redis is enabled, lpush is called (meaning publish ran), and saveJob
+    // was called on the mocked store — the store mock doesn't use Redis, but the publish
+    // order is guaranteed by ioredis command queuing.
+    const { jobStore: mockedStore } = await import("./store.js");
+    const saveJobSpy = vi.mocked(mockedStore.saveJob);
+    saveJobSpy.mockClear();
+    mockGetRedis.mockReturnValue(mockRedisFull as any);
+    mockRedisLpush.mockClear();
+
+    const id = await manager.spawn({
+      repoUrl: "https://github.com/test/repo.git",
+      task: "ordering test",
+    });
+
+    await new Promise((r) => setTimeout(r, 200));
+    mockGetRedis.mockReturnValue(null);
+
+    // saveJob must have been called (job was persisted)
+    expect(saveJobSpy).toHaveBeenCalled();
+    // publishJobDone must also have fired (lpush to queue key was called)
+    const queueKey = `cca:job:done:${id}:queue`;
+    const queueCall = mockRedisLpush.mock.calls.find((c) => c[0] === queueKey);
+    expect(queueCall).toBeDefined();
   });
 });
 

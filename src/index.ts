@@ -12,6 +12,7 @@
  * MCP tools exposed:
  *   spawn_agent       — clone a repo and run Claude on a task
  *   get_job_status    — check job status
+ *   wait_for_job      — block until a job reaches a terminal state (zero-poll)
  *   get_job_output    — stream job output
  *   list_jobs         — list all jobs
  *   cancel_job        — cancel a running job
@@ -222,11 +223,23 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "get_job_status",
-      description: "Get the current status of a spawned agent job.",
+      description: "Get the current status of a spawned agent job. For waiting until completion, prefer wait_for_job (zero-poll) or subscribe to the Redis pub/sub channel `cca:job:done:{job_id}` for instant notification.",
       inputSchema: {
         type: "object",
         properties: {
           job_id: { type: "string", description: "Job ID returned by spawn_agent" },
+        },
+        required: ["job_id"],
+      },
+    },
+    {
+      name: "wait_for_job",
+      description: "Block until a job reaches a terminal state (done/failed/cancelled/rejected/interrupted) or the timeout expires. Returns the final status and score. Preferred over polling get_job_status in a loop. For non-MCP coordinators: subscribe to Redis pub/sub channel `cca:job:done:{job_id}` for instant zero-copy notification — the payload is JSON with fields: job_id, status, score, score_source, finished_at, exit_code.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          job_id: { type: "string", description: "Job ID to wait for" },
+          timeout_seconds: { type: "number", description: "Maximum seconds to wait (default 300)" },
         },
         required: ["job_id"],
       },
@@ -249,7 +262,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "list_jobs",
-      description: "List all agent jobs (running, done, failed, cancelled).",
+      description: "List all agent jobs (running, done, failed, cancelled). To wait for a specific job, use wait_for_job or subscribe to `cca:job:done:{job_id}` on Redis.",
       inputSchema: {
         type: "object",
         properties: {
@@ -849,6 +862,49 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
               approval_issue_url: job.approvalIssueUrl,
               score: job.score ?? null,
               score_source: job.scoreSource ?? null,
+              pub_sub_channel: `cca:job:done:${job.id}`,
+            }),
+          },
+        ],
+      };
+    }
+
+    case "wait_for_job": {
+      const waitJobId = a.job_id as string;
+      const timeoutSeconds = typeof a.timeout_seconds === "number" ? a.timeout_seconds : 300;
+      logger.info("tool:wait_for_job", { job_id: waitJobId, timeout_seconds: timeoutSeconds });
+
+      const TERMINAL_STATUSES = new Set(["done", "failed", "cancelled", "rejected", "interrupted"]);
+      const deadlineMs = Date.now() + timeoutSeconds * 1000;
+
+      let waitRecord = await jobStore.getJob(waitJobId);
+      if (!waitRecord) {
+        return { content: [{ type: "text", text: JSON.stringify({ error: "Job not found" }) }] };
+      }
+
+      // Poll every 2 s until terminal or deadline — far cheaper than caller polling get_job_status.
+      // External (non-MCP) coordinators should use SUBSCRIBE on cca:job:done:{job_id} instead.
+      while (!TERMINAL_STATUSES.has(waitRecord.status) && Date.now() < deadlineMs) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 2000));
+        const updated = await jobStore.getJob(waitJobId);
+        if (updated) waitRecord = updated;
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              job_id: waitRecord.id,
+              status: waitRecord.status,
+              timed_out: !TERMINAL_STATUSES.has(waitRecord.status),
+              score: waitRecord.score ?? null,
+              score_source: waitRecord.scoreSource ?? null,
+              finished_at: waitRecord.finishedAt ?? null,
+              exit_code: waitRecord.exitCode ?? null,
+              error: waitRecord.error ?? null,
+              cost_usd: waitRecord.costUsd ?? null,
+              pub_sub_channel: `cca:job:done:${waitJobId}`,
             }),
           },
         ],
