@@ -1,14 +1,10 @@
-# TODO — Gemini CLI, Amp, and Codex CLI Drivers
+# TODO — Add AMAI brand icon
 
 - [x] Write PLAN.md and TODO.md
-- [x] git checkout -b feat/gemini-amp-codex-drivers
-- [ ] Create src/drivers/gemini.ts
-- [ ] Create src/drivers/amp.ts
-- [ ] Create src/drivers/codex.ts
-- [ ] Update src/drivers/pricing.ts with new model entries
-- [ ] Update src/drivers/index.ts (VALID_DRIVERS, getDriver, getDriverStatus)
-- [ ] Update src/index.ts agent_driver description
-- [ ] npm install && npm run build
-- [ ] npm test
-- [ ] Commit + push + gh pr create + gh pr merge --squash --auto
-- [ ] npm version patch && npm publish --access public
+- [ ] git checkout -b feat/brand-icon
+- [ ] mkdir assets && cp logo.png into it
+- [ ] Edit README.md to add img tag after first heading
+- [ ] git add -A && git commit -m "feat: add AMAI brand icon"
+- [ ] git push -u origin feat/brand-icon
+- [ ] gh pr create + gh pr merge --squash --auto
+- [ ] npm version patch && git push --follow-tags && npm publish --access public
