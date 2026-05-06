@@ -534,6 +534,45 @@ export class JobManager {
     })();
   }
 
+  /**
+   * Publish a one-shot completion notification to `cca:job:done:{id}` so that external
+   * coordinators can SUBSCRIBE and get notified instantly instead of polling.
+   * Also LPUSH to `cca:job:done:{id}:queue` so `wait_for_job` can use BLPOP.
+   *
+   * MUST be called AFTER persistJob() so subscribers always see the final state when
+   * they query the job record. ioredis queues commands in order on the same connection,
+   * so the SET from saveJob is guaranteed to reach Redis before the PUBLISH.
+   */
+  private publishJobDone(job: Job): void {
+    const redis = getRedis();
+    if (!redis) return;
+    const channel = `cca:job:done:${job.id}`;
+    const queueKey = `cca:job:done:${job.id}:queue`;
+    const payload = JSON.stringify({
+      job_id: job.id,
+      status: job.status,
+      score: job.score ?? null,
+      score_source: job.scoreSource ?? null,
+      finished_at: job.finishedAt?.toISOString() ?? null,
+      exit_code: job.exitCode ?? null,
+    });
+    (async () => {
+      try {
+        // PUBLISH for external Redis subscribers (zero-copy, non-persistent)
+        await redis.publish(channel, payload);
+        // LPUSH + TTL so wait_for_job MCP tool can use BLPOP-style waiting.
+        // Guard with typeof check: publish is the primary mechanism; lpush is best-effort.
+        if (typeof redis.lpush === 'function') {
+          await redis.lpush(queueKey, payload);
+          await redis.expire(queueKey, 7 * 24 * 60 * 60); // 7-day TTL matching job record
+        }
+        logger.info('job:done-published', { id: job.id, status: job.status, channel });
+      } catch (err) {
+        logger.warn('job:done-publish-failed', { id: job.id, err: String(err) });
+      }
+    })();
+  }
+
   private addOutput(job: Job, text: string): void {
     const lines = text.split('\n');
     for (const line of lines) {
@@ -679,6 +718,7 @@ export class JobManager {
         this.addOutput(job, "[cc-agent] Approval timed out after 24 hours. Job rejected.");
         this.persistJob(job);
         this.publishJobEvent(job);
+        this.publishJobDone(job);
         return;
       }
 
@@ -714,6 +754,7 @@ export class JobManager {
       job.error = String(err);
       job.finishedAt = new Date();
       this.persistJob(job);
+      this.publishJobDone(job);
     });
   }
 
@@ -1155,6 +1196,9 @@ export class JobManager {
       if (!sleepRequested && !tokenRotationRequested) {
         job.finishedAt = new Date();
         this.persistJob(job);
+        // Publish done-channel AFTER persistJob so subscribers see the final record.
+        // ioredis queues commands in order: the SET from saveJob precedes the PUBLISH.
+        this.publishJobDone(job);
         if (workDir) {
           setTimeout(
             () => rm(workDir!, { recursive: true, force: true }).catch(() => {}),
@@ -1226,6 +1270,7 @@ export class JobManager {
       job.finishedAt = new Date();
       this.persistJob(job);
       this.publishJobEvent(job);
+      this.publishJobDone(job);
       // Trigger onComplete chain if job finished successfully
       if (job.status === "done" && job.onComplete) {
         const oc = job.onComplete;
