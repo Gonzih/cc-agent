@@ -4,6 +4,8 @@
 
 [![npm version](https://img.shields.io/npm/v/@gonzih/cc-agent?label=@gonzih/cc-agent)](https://www.npmjs.com/package/@gonzih/cc-agent)
 
+**Distill and delegate.**
+
 MCP server for spawning Claude Code agents in GitHub repos. Give Claude Code the ability to **branch itself** — clone a repo and kick off a sub-agent to work on it autonomously, with persistent state across MCP restarts.
 
 Built by [@Gonzih](https://github.com/Gonzih).
