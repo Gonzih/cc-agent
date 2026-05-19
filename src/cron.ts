@@ -172,8 +172,6 @@ export class CronEngine {
 
   private async fire(cron: CronJob): Promise<void> {
     try {
-      await notify(this.namespace, `⏰ cron fired: ${cron.schedule}`);
-
       // Derive a namespace from the cron's repoUrl if available.
       // e.g. https://github.com/gonzih/polly-gamba → polly-gamba
       const cronNamespace = this.resolveNamespace(cron);
