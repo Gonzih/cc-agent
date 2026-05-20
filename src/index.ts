@@ -768,7 +768,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   switch (name) {
     case "spawn_agent": {
       const repoUrl = normalizeRepoUrl(a.repo_url as string);
-      logger.info("tool:spawn_agent", { repo_url: repoUrl, task: (a.task as string)?.slice(0, 80) });
+      logger.info("[mcp] spawn_agent", { repo_url: repoUrl, task: (a.task as string)?.slice(0, 80) });
 
       const owner = extractGithubOwner(repoUrl);
       const isTrusted = !owner || TRUSTED_OWNERS.includes(owner);
@@ -871,7 +871,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "get_job_status": {
-      logger.info("tool:get_job_status", { job_id: a.job_id });
+      logger.info("[mcp] get_job_status", { job_id: a.job_id });
       const job = manager.getJob(a.job_id as string);
       if (!job) {
         return { content: [{ type: "text", text: JSON.stringify({ error: "Job not found" }) }] };
@@ -908,7 +908,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     case "wait_for_job": {
       const waitJobId = a.job_id as string;
       const timeoutSeconds = typeof a.timeout_seconds === "number" ? a.timeout_seconds : 300;
-      logger.info("tool:wait_for_job", { job_id: waitJobId, timeout_seconds: timeoutSeconds });
+      logger.info("[mcp] wait_for_job", { job_id: waitJobId, timeout_seconds: timeoutSeconds });
 
       const TERMINAL_STATUSES = new Set(["done", "failed", "cancelled", "rejected", "interrupted"]);
       const deadlineMs = Date.now() + timeoutSeconds * 1000;
@@ -948,7 +948,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "get_job_output": {
-      logger.info("tool:get_job_output", { job_id: a.job_id, offset: a.offset });
+      logger.info("[mcp] get_job_output", { job_id: a.job_id, offset: a.offset });
       const offset = typeof a.offset === "number" ? a.offset : 0;
       const { lines, done, toolCalls } = await manager.getOutput(a.job_id as string, offset);
       return {
@@ -969,7 +969,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "list_jobs": {
-      logger.info("tool:list_jobs");
+      logger.info("[mcp] list_jobs");
       const minScore = typeof a.min_score === "number" ? a.min_score : undefined;
       let jobs = (await jobStore.listJobs()) ?? [];
       if (minScore !== undefined) {
@@ -988,7 +988,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "cancel_job": {
-      logger.info("tool:cancel_job", { job_id: a.job_id });
+      logger.info("[mcp] cancel_job", { job_id: a.job_id });
       const cancelled = manager.cancel(a.job_id as string);
       return {
         content: [
@@ -1001,7 +1001,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "send_message": {
-      logger.info("tool:send_message", { job_id: a.job_id });
+      logger.info("[mcp] send_message", { job_id: a.job_id });
       const result = await manager.sendMessage(a.job_id as string, a.message as string);
       return {
         content: [
@@ -1016,7 +1016,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "cost_summary": {
-      logger.info("tool:cost_summary");
+      logger.info("[mcp] cost_summary");
       // Use jobStore (Redis/disk) to include all persisted jobs, not just in-memory ones
       const allRecords = await jobStore.listJobs();
       let totalCostUsd = 0;
@@ -1050,13 +1050,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "get_version":
-      logger.info("tool:get_version");
+      logger.info("[mcp] get_version");
       return {
         content: [{ type: "text", text: JSON.stringify({ version: PKG_VERSION }) }],
       };
 
     case "create_profile": {
-      logger.info("tool:create_profile", { name: a.name });
+      logger.info("[mcp] create_profile", { name: a.name });
       const profileName = a.name as string;
       if (!/^[\w-]+$/.test(profileName)) {
         return {
@@ -1079,7 +1079,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "list_profiles": {
-      logger.info("tool:list_profiles");
+      logger.info("[mcp] list_profiles");
       const profiles = (await loadProfiles()).map(({ name, repoUrl, description, defaultBudgetUsd, builtin }) => ({
         name,
         repoUrl,
@@ -1094,7 +1094,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "delete_profile": {
-      logger.info("tool:delete_profile", { name: a.name });
+      logger.info("[mcp] delete_profile", { name: a.name });
       const deleted = await deleteProfile(a.name as string);
       return {
         content: [
@@ -1111,7 +1111,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "spawn_from_profile": {
-      logger.info("tool:spawn_from_profile", { profile_name: a.profile_name });
+      logger.info("[mcp] spawn_from_profile", { profile_name: a.profile_name });
       const profile = await getProfile(a.profile_name as string);
       if (!profile) {
         return {
@@ -1140,7 +1140,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "create_plan": {
-      logger.info("tool:create_plan", { goal: (a.goal as string)?.slice(0, 80) });
+      logger.info("[mcp] create_plan", { goal: (a.goal as string)?.slice(0, 80) });
       const goal = a.goal as string;
       const steps = a.steps as Array<{
         id: string;
@@ -1256,7 +1256,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "wake_job": {
-      logger.info("tool:wake_job", { job_id: a.job_id });
+      logger.info("[mcp] wake_job", { job_id: a.job_id });
       const result = await manager.wakeJob(a.job_id as string);
       return {
         content: [{ type: "text", text: JSON.stringify(result) }],
@@ -1264,7 +1264,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "list_model_ratings": {
-      logger.info("tool:list_model_ratings");
+      logger.info("[mcp] list_model_ratings");
       const ratingsFile = join(homedir(), ".cc-agent", "model-ratings.jsonl");
       let ratings: unknown[] = [];
       try {
@@ -1280,7 +1280,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "get_logs": {
-      logger.info("tool:get_logs", { lines: a.lines });
+      logger.info("[mcp] get_logs", { lines: a.lines });
       const n = Math.min(typeof a.lines === "number" ? a.lines : 100, 500);
       const logFile = join(homedir(), ".cc-agent", "logs", "cc-agent.log");
       let lines: string[] = [];
@@ -1297,7 +1297,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "list_project_issues": {
-      logger.info("tool:list_project_issues", { repo: a.repo });
+      logger.info("[mcp] list_project_issues", { repo: a.repo });
       const repo = a.repo as string;
       const state = (a.state as string | undefined) ?? "open";
       const labels = a.labels as string[] | undefined;
@@ -1317,7 +1317,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "work_on_issue": {
-      logger.info("tool:work_on_issue", { repo: a.repo, issue_number: a.issue_number });
+      logger.info("[mcp] work_on_issue", { repo: a.repo, issue_number: a.issue_number });
       const repo = a.repo as string;
       const issueNumber = a.issue_number as number;
       const extraContext = a.extra_context as string | undefined;
@@ -1372,7 +1372,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "comment_on_issue": {
-      logger.info("tool:comment_on_issue", { repo: a.repo, issue_number: a.issue_number });
+      logger.info("[mcp] comment_on_issue", { repo: a.repo, issue_number: a.issue_number });
       const repo = a.repo as string;
       const issueNumber = a.issue_number as number;
       const body = a.body as string;
@@ -1385,7 +1385,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "close_issue": {
-      logger.info("tool:close_issue", { repo: a.repo, issue_number: a.issue_number });
+      logger.info("[mcp] close_issue", { repo: a.repo, issue_number: a.issue_number });
       const repo = a.repo as string;
       const issueNumber = a.issue_number as number;
       const comment = a.comment as string | undefined;
@@ -1400,7 +1400,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "approve_job": {
-      logger.info("tool:approve_job", { job_id: a.job_id });
+      logger.info("[mcp] approve_job", { job_id: a.job_id });
       const result = await manager.approveJob(a.job_id as string);
       return {
         content: [{ type: "text", text: JSON.stringify(result) }],
@@ -1408,7 +1408,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "set_job_score": {
-      logger.info("tool:set_job_score", { job_id: a.job_id, score: a.score });
+      logger.info("[mcp] set_job_score", { job_id: a.job_id, score: a.score });
       const result = manager.setJobScore(a.job_id as string, a.score as number, a.reason as string | undefined);
       return {
         content: [{ type: "text", text: JSON.stringify(result) }],
@@ -1419,7 +1419,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       const repoParam = a.repo as string | undefined;
       const ns = repoParam ?? (a.namespace as string | undefined) ?? getNamespace();
       const limit = typeof a.limit === "number" ? a.limit : 10;
-      logger.info("tool:get_learnings", { key: ns, limit });
+      logger.info("[mcp] get_learnings", { key: ns, limit });
       const learnings = await learningsStore.getLearnings(ns, limit);
       return {
         content: [{
@@ -1431,7 +1431,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
     case "clear_learnings": {
       const ns = (a.namespace as string | undefined) ?? getNamespace();
-      logger.info("tool:clear_learnings", { namespace: ns });
+      logger.info("[mcp] clear_learnings", { namespace: ns });
       await learningsStore.clearLearnings(ns);
       return {
         content: [{
@@ -1442,7 +1442,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "docker_ps": {
-      logger.info("tool:docker_ps");
+      logger.info("[mcp] docker_ps");
       const containers = await listCcAgentContainers();
       return {
         content: [{
@@ -1453,7 +1453,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "list_token_status": {
-      logger.info("tool:list_token_status");
+      logger.info("[mcp] list_token_status");
       const tokens = loadTokens();
       const status = await getTokenStatus();
       const tokenList = tokens.map((t, i) => ({
@@ -1475,13 +1475,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "list_crons": {
-      logger.info("tool:list_crons");
+      logger.info("[mcp] list_crons");
       const crons = await cronEngine.listCrons();
       return { content: [{ type: "text", text: JSON.stringify({ crons, total: crons.length }) }] };
     }
 
     case "create_cron": {
-      logger.info("tool:create_cron", { schedule: a.schedule });
+      logger.info("[mcp] create_cron", { schedule: a.schedule });
       const cron = await cronEngine.addCron({
         chatId: typeof a.chat_id === "number" ? a.chat_id : 0,
         intervalMs: a.interval_ms as number,
@@ -1494,13 +1494,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "delete_cron": {
-      logger.info("tool:delete_cron", { cron_id: a.cron_id });
+      logger.info("[mcp] delete_cron", { cron_id: a.cron_id });
       const deleted = await cronEngine.deleteCron(a.cron_id as string);
       return { content: [{ type: "text", text: JSON.stringify({ deleted, cron_id: a.cron_id }) }] };
     }
 
     case "update_cron": {
-      logger.info("tool:update_cron", { cron_id: a.cron_id });
+      logger.info("[mcp] update_cron", { cron_id: a.cron_id });
       const updates: Record<string, unknown> = {};
       if (typeof a.interval_ms === "number") updates.intervalMs = a.interval_ms;
       if (typeof a.prompt === "string") updates.prompt = a.prompt;
@@ -1511,7 +1511,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "list_notifications": {
-      logger.info("tool:list_notifications");
+      logger.info("[mcp] list_notifications");
       const ns = getNamespace();
       const redis = getRedis();
       let messages: string[] = [];
@@ -1522,7 +1522,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "list_active_repos": {
-      logger.info("tool:list_active_repos");
+      logger.info("[mcp] list_active_repos");
       const redis = getRedis();
       if (!redis) return { content: [{ type: "text", text: "Redis unavailable" }] };
 
@@ -1577,7 +1577,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "get_pubsub_status": {
-      logger.info("tool:get_pubsub_status");
+      logger.info("[mcp] get_pubsub_status");
       const redis = getRedis();
       if (!redis) return { content: [{ type: "text", text: "Redis unavailable" }] };
 
@@ -1608,7 +1608,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "start_meta_agent": {
-      logger.info("tool:start_meta_agent", { namespace: a.namespace });
+      logger.info("[mcp] start_meta_agent", { namespace: a.namespace });
       const ns = a.namespace as string;
       const repoUrl = a.repo_url as string | undefined;
       try {
@@ -1630,7 +1630,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "message_meta_agent": {
-      logger.info("tool:message_meta_agent", { namespace: a.namespace });
+      logger.info("[mcp] message_meta_agent", { namespace: a.namespace });
       const ns = a.namespace as string;
       const message = a.message as string;
       try {
@@ -1652,7 +1652,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "list_meta_agents": {
-      logger.info("tool:list_meta_agents");
+      logger.info("[mcp] list_meta_agents");
       const agents = await metaAgentManager.listMetaAgents();
       return {
         content: [{
@@ -1663,7 +1663,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "stop_meta_agent": {
-      logger.info("tool:stop_meta_agent", { namespace: a.namespace });
+      logger.info("[mcp] stop_meta_agent", { namespace: a.namespace });
       const ns = a.namespace as string;
       try {
         await metaAgentManager.stopMetaAgent(ns);
@@ -1684,7 +1684,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "list_drivers": {
-      logger.info("tool:list_drivers");
+      logger.info("[mcp] list_drivers");
       const drivers = getDriverStatus();
       return {
         content: [{
@@ -1699,7 +1699,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "export_jobs": {
-      logger.info("tool:export_jobs");
+      logger.info("[mcp] export_jobs");
       const days = typeof a.days === "number" ? a.days : 7;
       const format = (a.format as string) === "json" ? "json" : "jsonl";
       const statusFilter = typeof a.status === "string" ? a.status : undefined;
@@ -1738,7 +1738,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "get_cost_report": {
-      logger.info("tool:get_cost_report");
+      logger.info("[mcp] get_cost_report");
       const days = typeof a.days === "number" ? a.days : 30;
       const groupBy = (a.group_by as string) === "day" ? "day" : (a.group_by as string) === "status" ? "status" : "repo";
       const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
@@ -1781,7 +1781,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "search_jobs": {
-      logger.info("tool:search_jobs", { query: a.query });
+      logger.info("[mcp] search_jobs", { query: a.query });
       const query = (a.query as string ?? "").toLowerCase();
       const days = typeof a.days === "number" ? a.days : 30;
       const statusFilter = typeof a.status === "string" ? a.status : undefined;
@@ -1846,6 +1846,19 @@ await manager.init();
 await seedBuiltinProfiles(profileStore);
 await coordinator.start();
 await cronEngine.start();
+
+// Startup summary — logged after all engines are initialized
+logger.info("[cc-agent] started", { version: PKG_VERSION, namespace });
+const _startupJobs = manager.list();
+const _jobCounts: Record<string, number> = {};
+for (const j of _startupJobs) _jobCounts[j.status] = (_jobCounts[j.status] ?? 0) + 1;
+logger.info("[cc-agent] startup", { jobs_total: _startupJobs.length, ..._jobCounts });
+const _startupCrons = await cronEngine.listCrons();
+logger.info("[cc-agent] startup", { crons_loaded: _startupCrons.length });
+for (const _cron of _startupCrons) {
+  logger.info("[cron] registered", { id: _cron.id, schedule: _cron.schedule, intervalMs: _cron.intervalMs });
+}
+
 metaAgentManager.startPoller();
 
 const transport = new StdioServerTransport();
