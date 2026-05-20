@@ -722,6 +722,42 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       description: "List all available agent drivers and their status (binary found / API key configured). Use this to check which drivers are ready to use before calling spawn_agent with agent_driver.",
       inputSchema: { type: "object", properties: {} },
     },
+    {
+      name: "export_jobs",
+      description: "Export all job records as JSONL or JSON for statistical analysis. Each record includes id, status, repo_url, task (truncated to 500 chars), started_at, finished_at, exit_code, output_lines count, score, and duration_seconds. Use this to pull job traces, compute success rates, and study failure modes.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          days: { type: "number", description: "How many days back to export (default: 7)" },
+          format: { type: "string", description: "Output format: 'jsonl' (one record per line) or 'json' (array). Default: 'jsonl'" },
+          status: { type: "string", description: "Filter by status: 'done' | 'failed' | 'cancelled' | 'running' (optional)" },
+        },
+      },
+    },
+    {
+      name: "get_cost_report",
+      description: "Longitudinal cost breakdown for research budget tracking. Returns grouped cost summary with total USD spent, job count, avg cost per job, and avg score. Useful for tracking spending by repo, day, or outcome.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          days: { type: "number", description: "How many days back to include (default: 30)" },
+          group_by: { type: "string", description: "Group by 'repo' | 'day' | 'status' (default: 'repo')" },
+        },
+      },
+    },
+    {
+      name: "search_jobs",
+      description: "Find jobs by content of task prompt. Returns matching jobs with a task snippet showing match context. Useful for finding all jobs that involved a specific tool, repo, or task type.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Search term to look for in task prompts (case-insensitive)" },
+          days: { type: "number", description: "How many days back to search (default: 30)" },
+          status: { type: "string", description: "Filter by status: 'done' | 'failed' | 'cancelled' | 'running' (optional)" },
+        },
+        required: ["query"],
+      },
+    },
   ],
 }));
 
@@ -1658,6 +1694,130 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             valid_names: listDrivers(),
             usage: "Pass agent_driver to spawn_agent to use a specific driver (default: 'claude')",
           }),
+        }],
+      };
+    }
+
+    case "export_jobs": {
+      logger.info("tool:export_jobs");
+      const days = typeof a.days === "number" ? a.days : 7;
+      const format = (a.format as string) === "json" ? "json" : "jsonl";
+      const statusFilter = typeof a.status === "string" ? a.status : undefined;
+      const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+      const allRecords = await jobStore.listJobs();
+      const filtered = allRecords.filter((r) => {
+        if (r.startedAt && new Date(r.startedAt).getTime() < cutoff) return false;
+        if (!r.startedAt) return false;
+        if (statusFilter && r.status !== statusFilter) return false;
+        return true;
+      });
+      const records = filtered.map((r) => {
+        let durationSeconds: number | null = null;
+        if (r.startedAt && r.finishedAt) {
+          durationSeconds = Math.round((new Date(r.finishedAt).getTime() - new Date(r.startedAt).getTime()) / 1000);
+        }
+        return {
+          id: r.id,
+          status: r.status,
+          repo_url: r.repoUrl,
+          task: (r.task ?? "").slice(0, 500),
+          started_at: r.startedAt ?? null,
+          finished_at: r.finishedAt ?? null,
+          exit_code: r.exitCode ?? null,
+          output_lines: r.outputLineCount ?? 0,
+          score: r.score ?? null,
+          duration_seconds: durationSeconds,
+        };
+      });
+      const text = format === "json"
+        ? JSON.stringify(records)
+        : records.map((r) => JSON.stringify(r)).join("\n");
+      return {
+        content: [{ type: "text", text }],
+      };
+    }
+
+    case "get_cost_report": {
+      logger.info("tool:get_cost_report");
+      const days = typeof a.days === "number" ? a.days : 30;
+      const groupBy = (a.group_by as string) === "day" ? "day" : (a.group_by as string) === "status" ? "status" : "repo";
+      const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+      const allRecords = await jobStore.listJobs();
+      const filtered = allRecords.filter((r) => {
+        if (!r.startedAt) return false;
+        return new Date(r.startedAt).getTime() >= cutoff;
+      });
+      const groups = new Map<string, { total_usd: number; job_count: number; scores: number[] }>();
+      for (const r of filtered) {
+        let key: string;
+        if (groupBy === "day") {
+          key = r.startedAt ? r.startedAt.slice(0, 10) : "unknown";
+        } else if (groupBy === "status") {
+          key = r.status;
+        } else {
+          key = r.repoUrl;
+        }
+        const g = groups.get(key) ?? { total_usd: 0, job_count: 0, scores: [] };
+        g.total_usd += r.costUsd ?? 0;
+        g.job_count += 1;
+        if (r.score != null) g.scores.push(r.score);
+        groups.set(key, g);
+      }
+      const summary = Array.from(groups.entries())
+        .map(([key, g]) => ({
+          group: key,
+          total_usd: Math.round(g.total_usd * 10000) / 10000,
+          job_count: g.job_count,
+          avg_cost_usd: g.job_count > 0 ? Math.round((g.total_usd / g.job_count) * 10000) / 10000 : 0,
+          avg_score: g.scores.length > 0 ? Math.round((g.scores.reduce((s, v) => s + v, 0) / g.scores.length) * 1000) / 1000 : null,
+        }))
+        .sort((a, b) => b.total_usd - a.total_usd);
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ group_by: groupBy, days, total_groups: summary.length, summary }),
+        }],
+      };
+    }
+
+    case "search_jobs": {
+      logger.info("tool:search_jobs", { query: a.query });
+      const query = (a.query as string ?? "").toLowerCase();
+      const days = typeof a.days === "number" ? a.days : 30;
+      const statusFilter = typeof a.status === "string" ? a.status : undefined;
+      const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+      if (!query) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ error: "query is required" }) }],
+        };
+      }
+      const allRecords = await jobStore.listJobs();
+      const matches = allRecords
+        .filter((r) => {
+          if (!r.startedAt) return false;
+          if (new Date(r.startedAt).getTime() < cutoff) return false;
+          if (statusFilter && r.status !== statusFilter) return false;
+          return (r.task ?? "").toLowerCase().includes(query);
+        })
+        .map((r) => {
+          const task = r.task ?? "";
+          const idx = task.toLowerCase().indexOf(query);
+          const start = Math.max(0, idx - 50);
+          const end = Math.min(task.length, idx + query.length + 50);
+          const snippet = (start > 0 ? "…" : "") + task.slice(start, end) + (end < task.length ? "…" : "");
+          return {
+            id: r.id,
+            status: r.status,
+            repo_url: r.repoUrl,
+            started_at: r.startedAt ?? null,
+            score: r.score ?? null,
+            task_snippet: snippet,
+          };
+        });
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ query: a.query, days, total: matches.length, matches }),
         }],
       };
     }
