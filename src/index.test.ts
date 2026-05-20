@@ -471,4 +471,84 @@ describe("MCP server handlers", () => {
     expect(typeof data.total_output_tokens).toBe("number");
     expect(Array.isArray(data.by_job)).toBe(true);
   });
+
+  it("list_tools includes export_jobs, get_cost_report, search_jobs", async () => {
+    const handler = capturedHandlers.get(ListToolsRequestSchema)!;
+    const result = await handler({});
+    const names = result.tools.map((t: { name: string }) => t.name);
+    expect(names).toContain("export_jobs");
+    expect(names).toContain("get_cost_report");
+    expect(names).toContain("search_jobs");
+  });
+
+  it("export_jobs returns JSONL text with no records when namespace is empty", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: { name: "export_jobs", arguments: { days: 7, format: "jsonl" } },
+    });
+    expect(typeof result.content[0].text).toBe("string");
+    // empty namespace → no records → empty string or parseable JSONL lines
+    const text = result.content[0].text;
+    if (text.length > 0) {
+      for (const line of text.split("\n").filter(Boolean)) {
+        const record = JSON.parse(line);
+        expect(typeof record.id).toBe("string");
+        expect(typeof record.status).toBe("string");
+      }
+    }
+  });
+
+  it("export_jobs with format json returns parseable JSON array", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: { name: "export_jobs", arguments: { days: 7, format: "json" } },
+    });
+    const arr = JSON.parse(result.content[0].text);
+    expect(Array.isArray(arr)).toBe(true);
+  });
+
+  it("get_cost_report returns group_by, days, total_groups, summary array", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: { name: "get_cost_report", arguments: { days: 30, group_by: "repo" } },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(data.group_by).toBe("repo");
+    expect(typeof data.days).toBe("number");
+    expect(typeof data.total_groups).toBe("number");
+    expect(Array.isArray(data.summary)).toBe(true);
+  });
+
+  it("get_cost_report with group_by day and status works", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    for (const group_by of ["day", "status"]) {
+      const result = await handler({
+        params: { name: "get_cost_report", arguments: { days: 30, group_by } },
+      });
+      const data = JSON.parse(result.content[0].text);
+      expect(data.group_by).toBe(group_by);
+      expect(Array.isArray(data.summary)).toBe(true);
+    }
+  });
+
+  it("search_jobs returns query, days, total, matches array", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: { name: "search_jobs", arguments: { query: "test", days: 30 } },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(data.query).toBe("test");
+    expect(typeof data.days).toBe("number");
+    expect(typeof data.total).toBe("number");
+    expect(Array.isArray(data.matches)).toBe(true);
+  });
+
+  it("search_jobs with missing query returns error", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: { name: "search_jobs", arguments: {} },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(data.error).toBeDefined();
+  });
 });

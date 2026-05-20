@@ -1,44 +1,57 @@
-# Plan: per-job completion pub/sub channel for zero-poll waiting
+# Plan: Research Inspection Tools — export_jobs, get_cost_report, search_jobs
 
 ## Task Restatement
-Add Redis `PUBLISH` to `cca:job:done:{job_id}` whenever a job reaches a terminal state
-(done, failed, cancelled, rejected), so external coordinators can `SUBSCRIBE` instead of polling.
-Also add a `wait_for_job` MCP tool that polls job status and returns when it's terminal, and
-update `get_job_status` / `list_jobs` descriptions to mention the pub/sub pattern.
+Add three MCP tools for agentic systems researchers: JSONL/JSON trace export, longitudinal
+cost reporting grouped by repo/day/status, and full-text job search by task or output content.
+All tools read from the existing `jobStore` (Redis/disk) — no new dependencies.
 
 ## Approaches Considered
 
-### A. PUBLISH only (no wait_for_job tool)
-Just add the PUBLISH and update descriptions. Simpler, but coordinators that use MCP can't
-easily benefit — they'd still need to poll `get_job_status`.
+### A. New module src/research.ts with helpers
+Extract shared logic (date filter, record mapper) into a separate file. Cleaner separation,
+but the helpers are trivial (< 20 lines each) and the existing pattern is to keep everything
+in index.ts handlers.
 
-### B. PUBLISH + wait_for_job using BLPOP (chosen)
-- PUBLISH to `cca:job:done:{id}` (for external Redis subscribers)
-- Also LPUSH to `cca:job:done:{id}:queue` (for BLPOP-based internal waiting)
-- `wait_for_job` MCP tool uses BLPOP to block until done without polling
-Pros: zero-poll for both MCP clients and Redis clients; atomic; no dedicated subscriber conn.
-Cons: queue key needs TTL; BLPOP ties up connection for long-running jobs.
+### B. Everything inline in index.ts (chosen)
+Follow the exact same pattern as cost_summary, list_jobs, get_job_output. Each case does its
+own `await jobStore.listJobs()`, filters, and shapes output. No new abstractions, no new deps.
+Consistent with all 35+ existing tools.
 
-### C. PUBLISH + wait_for_job polling internally
-- PUBLISH for external subscribers
-- `wait_for_job` polls jobStore.getJob() every 2s up to timeout
-Simpler implementation, slightly more overhead than B but still far better than caller polling.
-Good enough for the MCP tool since tool calls have inherent latency anyway.
+### C. Streaming JSONL via separate HTTP endpoint
+Overkill — MCP tools return text content blobs, not streams. Redis list is bounded (7-day TTL),
+so a full dump fits in memory fine.
 
-## Decision: Approach B (PUBLISH + BLPOP)
-BLPOP is the right primitive: blocks with timeout, works with existing ioredis connection,
-no dedicated subscriber mode needed. Clean TTL on queue key. Fallback to polling if Redis unavailable.
+## Decision: Approach B
+Inline handlers. Follow existing patterns exactly.
 
 ## Files to Touch
-- `src/agent.ts` — add `publishJobDone()` method, call it at all terminal-state transitions
-- `src/index.ts` — add `wait_for_job` tool definition + handler, update descriptions
-- `src/agent.test.ts` — test publishJobDone fires after persistJob
+- `src/index.ts` — add 3 tool definitions + 3 case handlers
+- `src/index.test.ts` — add tests for the 3 new tools
+
+## Implementation Details
+
+### export_jobs
+- Params: `days` (default 7), `format` ("jsonl"|"json", default "jsonl"), `status` (optional)
+- Logic: listJobs() → filter startedAt >= cutoff → filter status → map to lean record
+- Lean record fields: id, status, repo_url, task (slice 0..500), started_at, finished_at,
+  exit_code, output_lines, score, duration_seconds (computed from startedAt/finishedAt)
+- Output: JSONL = one JSON object per line joined by \n; JSON = JSON.stringify(array)
+
+### get_cost_report
+- Params: `days` (default 30), `group_by` ("repo"|"day"|"status", default "repo")
+- group key: "repo" → repoUrl, "day" → startedAt.slice(0,10), "status" → status
+- Per group: total_usd, job_count, avg_cost_usd, avg_score (null if no scored jobs)
+- Sort: by total_usd descending
+
+### search_jobs
+- Params: `query` (required), `days` (default 30), `status` (optional)
+- Search in: task field (case-insensitive includes)
+- Snippet: find the line containing the match, return 100 chars around it
+- Output: array of { id, status, repo_url, started_at, score, task_snippet }
 
 ## Risks and Unknowns
-- For smoke-test-failed and done/failed, the `finally` block in `run()` does the final persist;
-  publishJobDone must go AFTER that persist, not before.
-- For rejected (approval timeout), it runs outside `run()` in a setInterval — explicit publish needed.
-- For cancelled: signal poller sets cancelled, kill fires, then finally block runs and re-persists.
-  The job ends up with status "done" (the `job.status = "done"` line runs after the resolved promise).
-  So the publish in finally covers cancelled too.
-- BLPOP queue key must have a TTL matching job record TTL to avoid leaking.
+- `listJobs()` returns ALL jobs in the namespace (no pagination in Redis SMEMBERS). For large
+  namespaces this is fine — same as cost_summary which already does this.
+- `startedAt` may be undefined for jobs that never started (pending). Filter those out for
+  date-based filtering (treat as outside the window).
+- `format` validation: invalid value → default to "jsonl" gracefully.
