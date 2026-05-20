@@ -122,7 +122,7 @@ export class CronEngine {
   async start(): Promise<void> {
     if (this.running) return;
     this.running = true;
-    logger.info("cron:start", { namespace: this.namespace });
+    logger.info("[cron] start", { namespace: this.namespace });
     await this.migrate();
     this.scheduleTick();
   }
@@ -133,14 +133,14 @@ export class CronEngine {
       clearTimeout(this.tickTimer);
       this.tickTimer = null;
     }
-    logger.info("cron:stop", { namespace: this.namespace });
+    logger.info("[cron] stop", { namespace: this.namespace });
   }
 
   private scheduleTick(): void {
     if (!this.running) return;
     this.tickTimer = setTimeout(() => {
       this.tick()
-        .catch((err) => logger.warn("cron:tick-error", { err: String(err) }))
+        .catch((err) => logger.warn("[cron] tick-error", { err: String(err) }))
         .finally(() => this.scheduleTick());
     }, TICK_INTERVAL_MS);
     if (this.tickTimer && typeof (this.tickTimer as NodeJS.Timeout).unref === "function") {
@@ -172,26 +172,33 @@ export class CronEngine {
 
   private async fire(cron: CronJob): Promise<void> {
     try {
+      logger.info("[cron] fired", {
+        id: cron.id,
+        schedule: cron.schedule,
+        intervalMs: cron.intervalMs,
+        prompt: cron.prompt.slice(0, 200),
+      });
+
       // Derive a namespace from the cron's repoUrl if available.
       // e.g. https://github.com/gonzih/polly-gamba → polly-gamba
       const cronNamespace = this.resolveNamespace(cron);
 
       if (cronNamespace) {
         // Route through meta-agent: start if not running, then message it.
-        logger.info("cron:routing-to-meta-agent", {
+        logger.info("[cron] routing-to-meta-agent", {
           id: cron.id,
           schedule: cron.schedule,
           namespace: cronNamespace,
         });
         await metaAgentManager.messageMetaAgent(cronNamespace, cron.prompt, cron.repoUrl);
-        logger.info("cron:fired-via-meta-agent", {
+        logger.info("[cron] fired-via-meta-agent", {
           id: cron.id,
           schedule: cron.schedule,
           namespace: cronNamespace,
         });
       } else {
         // Fallback: no namespace/repo → spawn an isolated agent as before.
-        logger.info("cron:fallback-spawn-agent", {
+        logger.info("[cron] fallback-spawn-agent", {
           id: cron.id,
           schedule: cron.schedule,
         });
@@ -199,7 +206,7 @@ export class CronEngine {
           repoUrl: cron.repoUrl ?? "",
           task: cron.prompt,
         });
-        logger.info("cron:fired-via-spawn", {
+        logger.info("[cron] fired-via-spawn", {
           id: cron.id,
           schedule: cron.schedule,
           jobId,
@@ -208,7 +215,7 @@ export class CronEngine {
 
       await this.updateLastFired(cron.id);
     } catch (err) {
-      logger.warn("cron:fire-failed", { id: cron.id, err: String(err) });
+      logger.warn("[cron] fire-failed", { id: cron.id, err: String(err) });
     }
   }
 
@@ -274,7 +281,7 @@ export class CronEngine {
     if (redis) {
       await redis.eval(ADD_CRON_LUA, 1, this.redisKey(), JSON.stringify(newCron));
     }
-    logger.info("cron:added", { id: newCron.id, schedule: newCron.schedule });
+    logger.info("[cron] added", { id: newCron.id, schedule: newCron.schedule, intervalMs: newCron.intervalMs });
     return newCron;
   }
 
@@ -285,7 +292,7 @@ export class CronEngine {
     if (found === 1) {
       await redis.sadd(this.deletedKey(), id);
       await redis.expire(this.deletedKey(), 7 * 24 * 3600);
-      logger.info("cron:deleted", { id });
+      logger.info("[cron] deleted", { id });
     }
     return found === 1;
   }
@@ -344,9 +351,9 @@ export class CronEngine {
       await this.saveCrons(existing);
       // Mark migration as done (rename, not delete)
       await writeFile(done, new Date().toISOString(), "utf-8");
-      logger.info("cron:migration-complete", { migrated, src });
+      logger.info("[cron] migration-complete", { migrated, src });
     } catch (err) {
-      logger.warn("cron:migration-failed", { src, err: String(err) });
+      logger.warn("[cron] migration-failed", { src, err: String(err) });
     }
   }
 }

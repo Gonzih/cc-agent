@@ -432,7 +432,7 @@ export class JobManager {
     }
 
     if (orphanCount > 0) {
-      logger.info(`[cc-agent] Marked ${orphanCount} orphaned running jobs as interrupted`);
+      logger.info(`[job] init: marked ${orphanCount} orphaned running jobs as interrupted`);
     }
 
     // Persist any status corrections back to store
@@ -470,7 +470,7 @@ export class JobManager {
                 const resolved = fromRecord(current);
                 this.jobs.set(id, resolved);
                 this.restoredJobs.delete(id);
-                logger.info("job:synced-from-redis", { id, status: current.status });
+                logger.info("[job] synced-from-redis", { id, status: current.status });
                 return;
               }
             } catch { /* ignore — fall through to interrupt */ }
@@ -479,7 +479,7 @@ export class JobManager {
             job.finishedAt = new Date();
             job.interruptedAt = job.interruptedAt ?? new Date();
             job.error = (job.error ? job.error + "; " : "") + "Process exited after MCP restart";
-            logger.warn("job:process-died", { id, pid: job.pid });
+            logger.warn("[job] process-died", { id, pid: job.pid });
             this.persistJob(job);
             this.addOutput(job, "[cc-agent] Process no longer alive after MCP restart");
           })().catch(() => {});
@@ -526,10 +526,10 @@ export class JobManager {
           );
           await redis.xtrim('cca:event-stream', 'MAXLEN', '~', '500');
         } catch (streamErr) {
-          logger.warn('job:stream-write-failed', { id: job.id, err: String(streamErr) });
+          logger.warn('[job] stream-write-failed', { id: job.id, err: String(streamErr) });
         }
       } catch (err) {
-        logger.warn('job:event-publish-failed', { id: job.id, err: String(err) });
+        logger.warn('[job] event-publish-failed', { id: job.id, err: String(err) });
       }
     })();
   }
@@ -566,9 +566,9 @@ export class JobManager {
           await redis.lpush(queueKey, payload);
           await redis.expire(queueKey, 7 * 24 * 60 * 60); // 7-day TTL matching job record
         }
-        logger.info('job:done-published', { id: job.id, status: job.status, channel });
+        logger.info('[job] done-published', { id: job.id, status: job.status, channel });
       } catch (err) {
-        logger.warn('job:done-publish-failed', { id: job.id, err: String(err) });
+        logger.warn('[job] done-publish-failed', { id: job.id, err: String(err) });
       }
     })();
   }
@@ -664,7 +664,7 @@ export class JobManager {
     };
     this.jobs.set(id, job);
     this.persistJob(job);
-    logger.info("job:spawned", { id, status: job.status, repoUrl: opts.repoUrl });
+    logger.info("[job] created", { id, status: job.status, repoUrl: opts.repoUrl, branch: opts.branch, task: opts.task.slice(0, 200) });
 
     // Warn if the raw task is large — user may want to decompose it via create_plan
     if (opts.task.length > 800) {
@@ -714,7 +714,7 @@ export class JobManager {
         job.status = "rejected";
         job.finishedAt = new Date();
         job.error = "Approval timed out after 24 hours";
-        logger.info("job:approval-timeout", { id: job.id });
+        logger.info("[job] approval-timeout", { id: job.id });
         this.addOutput(job, "[cc-agent] Approval timed out after 24 hours. Job rejected.");
         this.persistJob(job);
         this.publishJobEvent(job);
@@ -743,7 +743,7 @@ export class JobManager {
   }
 
   private doApprove(job: Job): void {
-    logger.info("job:approved", { id: job.id });
+    logger.info("[job] approved", { id: job.id });
     this.addOutput(job, "[cc-agent] Approved. Starting job...");
     const runWithToken = async () => {
       const token = (job.claudeToken ?? await getCurrentToken()) || this.defaultToken;
@@ -777,7 +777,7 @@ export class JobManager {
     // Docker isolation mode: run the entire agent inside a fresh container
     if (job.dockerIsolation) {
       if (shouldSkipDocker(job)) {
-        logger.info("[cc-agent] Skipping Docker isolation — native macOS/ML workload detected", { id: job.id });
+        logger.info("[job] docker-skipped — native macOS/ML workload detected", { id: job.id });
         this.addOutput(job, "[cc-agent] Skipping Docker isolation — native macOS/ML workload detected");
         // Fall through to host mode without mutating job.dockerIsolation
       } else {
@@ -798,7 +798,7 @@ export class JobManager {
         // 1. Clone
         workDir = await mkdtemp(join(tmpdir(), `cc-agent-${job.id.slice(0, 8)}-`));
         job.workDir = workDir;
-        logger.info("job:cloning", { id: job.id, repoUrl: job.repoUrl });
+        logger.info("[job] cloning", { id: job.id, repoUrl: job.repoUrl, branch: job.branch });
         this.addOutput(job, `[cc-agent] Cloning ${job.repoUrl}...`);
 
         const cloneArgs = ["clone", "--depth", "1"];
@@ -839,7 +839,7 @@ export class JobManager {
             job.status = "failed";
             job.error = `smoke test failed: ${reason}`;
             job.finishedAt = new Date();
-            logger.warn("job:smoke-test-failed", { id: job.id, error: job.error });
+            logger.warn("[job] smoke-test-failed", { id: job.id, error: job.error });
             this.addOutput(job, `[cc-agent] Smoke test FAILED: ${job.error}`);
             this.persistJob(job);
             this.publishJobEvent(job);
@@ -855,11 +855,11 @@ export class JobManager {
       if (existsSync(agentsMdPath)) {
         const content = await readFile(agentsMdPath, 'utf-8');
         repoContext = `\n\n## Repo Context (from AGENTS.md)\n${content.trim()}\n`;
-        logger.info("job:agents-md-injected", { id: job.id, bytes: content.length });
+        logger.info("[job] agents-md-injected", { id: job.id, bytes: content.length });
       } else if (existsSync(ccAgentNotesPath)) {
         const content = await readFile(ccAgentNotesPath, 'utf-8');
         repoContext = `\n\n## Repo Context (from .cc-agent/notes.md)\n${content.trim()}\n`;
-        logger.info("job:cc-agent-notes-injected", { id: job.id, bytes: content.length });
+        logger.info("[job] cc-agent-notes-injected", { id: job.id, bytes: content.length });
       }
 
       // 4. Run agent via driver
@@ -867,7 +867,7 @@ export class JobManager {
       this.persistJob(job);
       this.publishJobEvent(job);
       const driverName = job.agentDriver ?? "claude";
-      logger.info("job:running", { id: job.id, isResume, driver: driverName });
+      logger.info("[job] running", { id: job.id, pid: job.pid, isResume, driver: driverName });
       this.addOutput(job, isResume
         ? `[cc-agent] Resuming agent after sleep...`
         : `[cc-agent] Starting agent (${driverName}) with task...`);
@@ -908,6 +908,7 @@ export class JobManager {
           job.pid = agentProc.pid;
           this.persistJob(job);
         }
+        logger.info("[spawn] subprocess started", { job_id: job.id, pid: agentProc.pid ?? null, cwd: workDir, driver: driverName });
 
         this.kills.set(job.id, () => agentProc.kill());
         job.stdinStream = null;
@@ -918,7 +919,7 @@ export class JobManager {
           const timeoutMs = timeoutMinutes * 60 * 1000;
           const timeoutTimer = setTimeout(() => {
             this.timeoutTimers.delete(job.id);
-            logger.warn(`[cc-agent:timeout] Job exceeded ${timeoutMinutes}m wall clock limit — terminating`, { id: job.id });
+            logger.warn(`[job] timeout: exceeded ${timeoutMinutes}m wall clock limit — terminating`, { id: job.id });
             this.addOutput(job, `[cc-agent:timeout] Job exceeded ${timeoutMinutes}m wall clock limit — terminating`);
             job.timedOut = true;
             job.failReason = "timeout";
@@ -1003,12 +1004,12 @@ export class JobManager {
           const cost = job.costUsd ?? 0;
           if (!budgetWarned && cost >= maxBudget * 0.9) {
             budgetWarned = true;
-            logger.warn(`[cc-agent:budget] Job at 90% of $${maxBudget} budget`, { id: job.id, costUsd: cost });
+            logger.warn(`[job] budget-warning: at 90% of $${maxBudget} budget`, { id: job.id, costUsd: cost });
             this.addOutput(job, `[cc-agent:budget] Job at 90% of $${maxBudget} budget`);
           }
           if (!budgetKillStarted && cost >= maxBudget) {
             budgetKillStarted = true;
-            logger.warn(`[cc-agent:budget] Budget $${maxBudget} exceeded — terminating`, { id: job.id, costUsd: cost });
+            logger.warn(`[job] budget-exceeded: $${maxBudget} exceeded — terminating`, { id: job.id, costUsd: cost });
             this.addOutput(job, `[cc-agent:budget] Budget $${maxBudget} exceeded — terminating`);
             job.failReason = "budget_exceeded";
             this.persistJob(job);
@@ -1028,7 +1029,7 @@ export class JobManager {
               const status = await getTokenStatus();
               if (!status.allExhausted) {
                 tokenRotationRequested = true;
-                logger.warn("job:token-rotated", {
+                logger.warn("[job] token-rotated", {
                   id: job.id,
                   newIndex: status.index,
                   total: status.total,
@@ -1045,7 +1046,7 @@ export class JobManager {
                 job.sleepReason = text.trim().slice(0, 500);
                 this.persistJob(job);
                 this.publishJobEvent(job);
-                logger.warn("job:sleeping", { id: job.id, sleepUntil: job.sleepUntil, triggeringText: text.trim().slice(0, 500) });
+                logger.warn("[job] sleeping", { id: job.id, sleepUntil: job.sleepUntil, triggeringText: text.trim().slice(0, 500) });
                 this.addOutput(job, `[cc-agent] All tokens exhausted. Sleeping until ${job.sleepUntil}`);
                 agentProc.kill();
               }
@@ -1064,6 +1065,7 @@ export class JobManager {
         });
 
         agentProc.on("exit", (code: number | null) => {
+          logger.info("[spawn] subprocess exited", { job_id: job.id, pid: job.pid ?? null, exit_code: code });
           // Clear wall-clock timeout timer — job has exited, timer is no longer needed
           const t = this.timeoutTimers.get(job.id);
           if (t) { clearTimeout(t); this.timeoutTimers.delete(job.id); }
@@ -1090,7 +1092,7 @@ export class JobManager {
         const savedContinueSession = job.continueSession;
         job.continueSession = false;
         this.addOutput(job, `[cc-agent:retry] Context overflow detected — retrying with fresh context`);
-        logger.info("job:context-overflow-retry", { id: job.id, retryCount: job.retryCount });
+        logger.info("[job] context-overflow-retry", { id: job.id, retryCount: job.retryCount });
         this.persistJob(job);
         await this.run(job, token);
         job.continueSession = savedContinueSession;
@@ -1100,7 +1102,7 @@ export class JobManager {
       if (tokenRotationRequested) {
         // Immediately re-run with the newly rotated token (no sleep)
         const nextToken = (job.claudeToken ?? await getCurrentToken()) || this.defaultToken;
-        logger.info("job:token-rotation-restart", { id: job.id, tokenIndex: job.tokenIndex });
+        logger.info("[job] token-rotation-restart", { id: job.id, tokenIndex: job.tokenIndex });
         await this.run(job, nextToken);
         return;
       }
@@ -1119,7 +1121,8 @@ export class JobManager {
       }
 
       job.status = "done";
-      logger.info("job:done", { id: job.id, exitCode: job.exitCode ?? 0, costUsd: job.costUsd, score: job.score, scoreSource: job.scoreSource });
+      const durationSeconds = Math.round((Date.now() - job.startedAt.getTime()) / 1000);
+      logger.info("[job] done", { id: job.id, exit_code: job.exitCode ?? 0, duration_seconds: durationSeconds, output_lines: job.output.length, cost_usd: job.costUsd, score: job.score, score_source: job.scoreSource });
       this.addOutput(job, `[cc-agent] Done. Exit code: ${job.exitCode ?? 0}`);
       this.persistJob(job);
       this.publishJobEvent(job);
@@ -1128,10 +1131,10 @@ export class JobManager {
       if (job.onComplete) {
         const oc = job.onComplete;
         this.spawn({ repoUrl: oc.repo_url, task: oc.task, branch: oc.branch }).then((childId) => {
-          logger.info("job:oncomplete-spawned", { parentId: job.id, childId });
+          logger.info("[job] oncomplete-spawned", { parentId: job.id, childId });
           this.addOutput(job, `[cc-agent] onComplete: spawned child job ${childId}`);
         }).catch((err) => {
-          logger.warn("job:oncomplete-spawn-failed", { parentId: job.id, err: String(err) });
+          logger.warn("[job] oncomplete-spawn-failed", { parentId: job.id, err: String(err) });
           this.addOutput(job, `[cc-agent] onComplete spawn failed: ${String(err)}`);
           this.publishJobEvent(job);
         });
@@ -1144,9 +1147,9 @@ export class JobManager {
         (async () => {
           await learningsStore.clearLearnings(rk);
           await learningsStore.addLearning(rk, learnings);
-          logger.info("learnings:replaced-with-compressed", { id: job.id, repoKey: rk, length: learnings.length });
+          logger.info("[job] learnings-replaced", { id: job.id, repoKey: rk, length: learnings.length });
         })().catch((err) => {
-          logger.warn("job:learnings-store-failed", { id: job.id, err: String(err) });
+          logger.warn("[job] learnings-store-failed", { id: job.id, err: String(err) });
         });
       }
 
@@ -1158,14 +1161,14 @@ export class JobManager {
           try {
             const planContent = await readFile(planPath, 'utf-8');
             this.addOutput(job, `[cc-agent] PLAN.md:\n${planContent.trim()}`);
-            logger.info("job:plan-artifact-read", { id: job.id, bytes: planContent.length });
+            logger.info("[job] plan-artifact-read", { id: job.id, bytes: planContent.length });
           } catch { /* non-fatal */ }
         }
         if (existsSync(todoPath)) {
           try {
             const todoContent = await readFile(todoPath, 'utf-8');
             this.addOutput(job, `[cc-agent] TODO.md:\n${todoContent.trim()}`);
-            logger.info("job:todo-artifact-read", { id: job.id, bytes: todoContent.length });
+            logger.info("[job] todo-artifact-read", { id: job.id, bytes: todoContent.length });
           } catch { /* non-fatal */ }
         }
       }
@@ -1187,7 +1190,7 @@ export class JobManager {
           : job.failReason === "budget_exceeded"
           ? `Budget $${job.maxBudgetUsd ?? 20} exceeded`
           : String(err);
-        logger.error("job:failed", { id: job.id, error: job.error, failReason: job.failReason });
+        logger.error("[job] failed", { id: job.id, exit_code: job.exitCode, error: (job.error ?? "").slice(0, 200), fail_reason: job.failReason });
         this.addOutput(job, `[cc-agent] FAILED: ${job.error}`);
         this.persistJob(job);
         this.publishJobEvent(job);
@@ -1212,7 +1215,7 @@ export class JobManager {
   private async runDockerIsolated(job: Job, token?: string): Promise<void> {
     const dockerAvailable = await isDockerAvailable();
     if (!dockerAvailable) {
-      logger.warn("docker:unavailable — falling back to host mode", { id: job.id });
+      logger.warn("[job] docker-unavailable — falling back to host mode", { id: job.id });
       this.addOutput(job, "[cc-agent] Docker unavailable — falling back to host mode");
       job.dockerIsolation = false;
       await this.run(job, token);
@@ -1223,7 +1226,7 @@ export class JobManager {
     this.addOutput(job, `[cc-agent] Docker isolation requested — spawning container ${containerName}`);
     job.status = "running";
     this.persistJob(job);
-    logger.info("job:docker-start", { id: job.id, containerName });
+    logger.info("[job] docker-start", { id: job.id, containerName });
     this.addOutput(job, `[cc-agent] Starting Docker container: ${containerName}`);
 
     const githubToken = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
@@ -1258,12 +1261,12 @@ export class JobManager {
       });
 
       job.status = "done";
-      logger.info("job:done", { id: job.id, exitCode: job.exitCode ?? 0, mode: "docker" });
+      logger.info("[job] done", { id: job.id, exit_code: job.exitCode ?? 0, mode: "docker" });
       this.addOutput(job, `[cc-agent] Done (Docker). Exit code: ${job.exitCode ?? 0}`);
     } catch (err) {
       job.status = "failed";
       job.error = String(err);
-      logger.error("job:failed", { id: job.id, error: job.error, mode: "docker" });
+      logger.error("[job] failed", { id: job.id, exit_code: job.exitCode, error: (job.error ?? "").slice(0, 200), mode: "docker" });
       this.addOutput(job, `[cc-agent] FAILED (Docker): ${job.error}`);
     } finally {
       this.activeDockerContainers.delete(containerName);
@@ -1275,10 +1278,10 @@ export class JobManager {
       if (job.status === "done" && job.onComplete) {
         const oc = job.onComplete;
         this.spawn({ repoUrl: oc.repo_url, task: oc.task, branch: oc.branch }).then((childId) => {
-          logger.info("job:oncomplete-spawned", { parentId: job.id, childId });
+          logger.info("[job] oncomplete-spawned", { parentId: job.id, childId });
           this.addOutput(job, `[cc-agent] onComplete: spawned child job ${childId}`);
         }).catch((err2) => {
-          logger.warn("job:oncomplete-spawn-failed", { parentId: job.id, err: String(err2) });
+          logger.warn("[job] oncomplete-spawn-failed", { parentId: job.id, err: String(err2) });
           this.addOutput(job, `[cc-agent] onComplete spawn failed: ${String(err2)}`);
         });
       }
@@ -1287,7 +1290,7 @@ export class JobManager {
 
   private async cleanupDockerContainers(): Promise<void> {
     if (this.activeDockerContainers.size === 0) return;
-    logger.info("docker:cleanup", { containers: Array.from(this.activeDockerContainers) });
+    logger.info("[job] docker-cleanup", { containers: Array.from(this.activeDockerContainers) });
     const containers = Array.from(this.activeDockerContainers);
     this.activeDockerContainers.clear();
     await Promise.allSettled(
@@ -1314,13 +1317,13 @@ export class JobManager {
       notes: null,
     };
     await appendFile(ratingsFile, JSON.stringify(entry) + "\n", "utf-8");
-    logger.info("model-rating:written", { job_id: job.id, model: job.ollamaModel });
+    logger.info("[job] model-rating-written", { job_id: job.id, model: job.ollamaModel });
   }
 
   private scheduleWake(job: Job): void {
     const sleepUntil = job.sleepUntil ? new Date(job.sleepUntil) : new Date(Date.now() + 60 * 60 * 1000);
     const delay = Math.max(0, sleepUntil.getTime() - Date.now());
-    logger.info("job:schedule-wake", { id: job.id, sleepUntil: sleepUntil.toISOString(), delayMs: delay });
+    logger.info("[job] schedule-wake", { id: job.id, sleepUntil: sleepUntil.toISOString(), delayMs: delay });
     const timer = setTimeout(() => {
       this.wakeTimers.delete(job.id);
       this.doWake(job);
@@ -1350,7 +1353,7 @@ export class JobManager {
 
   private doWake(job: Job): void {
     if (job.status !== "sleeping") return;
-    logger.info("job:waking", { id: job.id });
+    logger.info("[job] waking", { id: job.id });
     job.sleepUntil = undefined;
     this.persistJob(job);
     this.addOutput(job, `[cc-agent] Waking up, resuming task...`);
@@ -1394,11 +1397,11 @@ export class JobManager {
         job.status = "failed";
         job.error = "Dependency failed";
         job.finishedAt = new Date();
-        logger.warn("job:dep-failed", { id: job.id });
+        logger.warn("[job] dep-failed", { id: job.id });
         this.persistJob(job);
         this.publishJobEvent(job);
       } else if (allDone) {
-        logger.info("job:promoting", { id: job.id });
+        logger.info("[job] promoting", { id: job.id });
         this.promote(job);
       }
     }
@@ -1531,7 +1534,7 @@ export class JobManager {
 
     job.status = "cancelled";
     job.finishedAt = new Date();
-    logger.info("job:cancelled", { id });
+    logger.info("[job] cancelled", { id });
     this.addOutput(job, "[cc-agent] Cancelled by user.");
     this.persistJob(job);
     this.publishJobEvent(job);

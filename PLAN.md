@@ -1,57 +1,58 @@
-# Plan: Research Inspection Tools — export_jobs, get_cost_report, search_jobs
+# Plan: Verbose Logging — [cron] / [job] / [spawn] / [mcp]
 
 ## Task Restatement
-Add three MCP tools for agentic systems researchers: JSONL/JSON trace export, longitudinal
-cost reporting grouped by repo/day/status, and full-text job search by task or output content.
-All tools read from the existing `jobStore` (Redis/disk) — no new dependencies.
+Add structured, grep-friendly logging throughout cc-agent. Each log line gets a
+`[cron]`, `[job]`, `[spawn]`, or `[mcp]` prefix so operators can filter by subsystem.
+Covers: cron fire/registered, job lifecycle, agent subprocess pid/exit, MCP tool calls,
+and a startup banner with job/cron counts.
 
-## Approaches Considered
+## Approaches
 
-### A. New module src/research.ts with helpers
-Extract shared logic (date filter, record mapper) into a separate file. Cleaner separation,
-but the helpers are trivial (< 20 lines each) and the existing pattern is to keep everything
-in index.ts handlers.
+### A. New log wrapper functions per subsystem
+Add `logCron()`, `logJob()`, `logSpawn()`, `logMcp()` helpers that inject the prefix
+automatically. Clean, but requires touching every call site and adding a new abstraction.
 
-### B. Everything inline in index.ts (chosen)
-Follow the exact same pattern as cost_summary, list_jobs, get_job_output. Each case does its
-own `await jobStore.listJobs()`, filters, and shapes output. No new abstractions, no new deps.
-Consistent with all 35+ existing tools.
+### B. Rename message strings in place (chosen)
+Change existing `logger.info("cron:start", ...)` → `logger.info("[cron] start", ...)`.
+Add new calls where missing. Zero new abstractions, consistent with the existing pattern
+of plain `logger.info(msg, data)` calls. Tests mock logger entirely so message renames
+are safe.
 
-### C. Streaming JSONL via separate HTTP endpoint
-Overkill — MCP tools return text content blobs, not streams. Redis list is bounded (7-day TTL),
-so a full dump fits in memory fine.
+### C. Structured log levels (DEBUG/INFO/WARN)
+Add a DEBUG level to logger.ts for tool calls. Rejected: unnecessary complexity; the
+existing INFO level is sufficient for operators tailing the log file.
 
 ## Decision: Approach B
-Inline handlers. Follow existing patterns exactly.
 
 ## Files to Touch
-- `src/index.ts` — add 3 tool definitions + 3 case handlers
-- `src/index.test.ts` — add tests for the 3 new tools
+- `src/cron.ts` — rename `cron:xxx` → `[cron] xxx`, add `[cron] fired` at top of fire()
+- `src/agent.ts` — rename `job:xxx` → `[job] xxx`, add `[spawn]` logs, enhance data fields
+- `src/index.ts` — rename `tool:xxx` → `[mcp] xxx`, add startup summary after cronEngine.start()
 
-## Implementation Details
+## What Changes
 
-### export_jobs
-- Params: `days` (default 7), `format` ("jsonl"|"json", default "jsonl"), `status` (optional)
-- Logic: listJobs() → filter startedAt >= cutoff → filter status → map to lean record
-- Lean record fields: id, status, repo_url, task (slice 0..500), started_at, finished_at,
-  exit_code, output_lines, score, duration_seconds (computed from startedAt/finishedAt)
-- Output: JSONL = one JSON object per line joined by \n; JSON = JSON.stringify(array)
+### cron.ts
+- Prefix all existing `cron:xxx` messages to `[cron] xxx`
+- Add `[cron] fired` at start of `fire()` with id, schedule, intervalMs, prompt[:200]
 
-### get_cost_report
-- Params: `days` (default 30), `group_by` ("repo"|"day"|"status", default "repo")
-- group key: "repo" → repoUrl, "day" → startedAt.slice(0,10), "status" → status
-- Per group: total_usd, job_count, avg_cost_usd, avg_score (null if no scored jobs)
-- Sort: by total_usd descending
+### agent.ts
+- Prefix all existing `job:xxx` messages to `[job] xxx`
+- `[job] created` — add task[:200] and branch to existing job:spawned
+- `[job] cloning` — add branch field
+- `[job] running` — add pid field
+- `[job] done` — add duration_seconds and output_lines
+- `[job] failed` — add exit_code
+- Add `[spawn] subprocess started` after driver.spawn() — pid, cwd, driver (no token)
+- Add `[spawn] subprocess exited` in exit handler — exit_code
 
-### search_jobs
-- Params: `query` (required), `days` (default 30), `status` (optional)
-- Search in: task field (case-insensitive includes)
-- Snippet: find the line containing the match, return 100 chars around it
-- Output: array of { id, status, repo_url, started_at, score, task_snippet }
+### index.ts
+- Prefix all existing `tool:xxx` messages to `[mcp] xxx`
+- Add startup summary after cronEngine.start():
+  - `[cc-agent] started` with version + namespace
+  - `[cc-agent] startup` with total jobs and per-status counts
+  - `[cc-agent] startup` with cron count
+  - `[cron] registered` for each loaded cron
 
-## Risks and Unknowns
-- `listJobs()` returns ALL jobs in the namespace (no pagination in Redis SMEMBERS). For large
-  namespaces this is fine — same as cost_summary which already does this.
-- `startedAt` may be undefined for jobs that never started (pending). Filter those out for
-  date-based filtering (treat as outside the window).
-- `format` validation: invalid value → default to "jsonl" gracefully.
+## Risks
+- Log message renames: tests mock logger entirely — safe
+- duration_seconds computed at job:done before finishedAt is set — use Date.now()

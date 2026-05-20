@@ -1,13 +1,13 @@
-# TODO — Research Inspection Tools
+# TODO — Verbose Logging
 
 - [x] Write PLAN.md and TODO.md
-- [ ] git checkout -b feat/research-inspection-tools
-- [ ] Add 3 tool definitions to ListToolsRequestSchema handler in src/index.ts
-- [ ] Add 3 case handlers to CallToolRequestSchema switch in src/index.ts
-- [ ] Add tests for all 3 new tools in src/index.test.ts
+- [x] git checkout -b feat/verbose-logging
+- [ ] cron.ts: rename cron:xxx → [cron] xxx, add [cron] fired at start of fire()
+- [ ] agent.ts: rename job:xxx → [job] xxx, add [spawn] logs, enhance data fields
+- [ ] index.ts: rename tool:xxx → [mcp] xxx, add startup summary
 - [ ] npm install && npm test (verify all tests pass)
 - [ ] git add -A && git diff --staged (review diff)
 - [ ] git commit
-- [ ] git push -u origin feat/research-inspection-tools
+- [ ] git push -u origin feat/verbose-logging
 - [ ] gh pr create + gh pr merge --squash --auto
 - [ ] npm version patch && git push --follow-tags && npm publish --access public
