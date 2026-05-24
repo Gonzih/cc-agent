@@ -1,13 +1,12 @@
-# TODO — Verbose Logging
+# TODO — Inject current date into preamble
 
 - [x] Write PLAN.md and TODO.md
-- [x] git checkout -b feat/verbose-logging
-- [ ] cron.ts: rename cron:xxx → [cron] xxx, add [cron] fired at start of fire()
-- [ ] agent.ts: rename job:xxx → [job] xxx, add [spawn] logs, enhance data fields
-- [ ] index.ts: rename tool:xxx → [mcp] xxx, add startup summary
-- [ ] npm install && npm test (verify all tests pass)
-- [ ] git add -A && git diff --staged (review diff)
+- [ ] git checkout -b fix/inject-current-date
+- [ ] preamble.ts: create getPreamble(), update injectPreamble + getPreambleText, remove DEFAULT_PREAMBLE const
+- [ ] agent.test.ts: replace DEFAULT_PREAMBLE with getPreamble(), add fake timers to affected describe blocks
+- [ ] npm install && npm test (all pass)
+- [ ] git add -A && git diff --staged (review)
 - [ ] git commit
-- [ ] git push -u origin feat/verbose-logging
+- [ ] git push -u origin fix/inject-current-date
 - [ ] gh pr create + gh pr merge --squash --auto
 - [ ] npm version patch && git push --follow-tags && npm publish --access public

@@ -1,58 +1,36 @@
-# Plan: Verbose Logging — [cron] / [job] / [spawn] / [mcp]
+# Plan: Inject current date into agent preamble
 
 ## Task Restatement
-Add structured, grep-friendly logging throughout cc-agent. Each log line gets a
-`[cron]`, `[job]`, `[spawn]`, or `[mcp]` prefix so operators can filter by subsystem.
-Covers: cron fire/registered, job lifecycle, agent subprocess pid/exit, MCP tool calls,
-and a startup banner with job/cron counts.
+`DEFAULT_PREAMBLE` is a static `const` string in `src/preamble.ts`. Agents that receive it
+don't know the current date and hallucinate wrong years. Fix: convert it to a `getPreamble()`
+function that injects the current ISO date/time on each call. Update every consumer.
 
 ## Approaches
 
-### A. New log wrapper functions per subsystem
-Add `logCron()`, `logJob()`, `logSpawn()`, `logMcp()` helpers that inject the prefix
-automatically. Clean, but requires touching every call site and adding a new abstraction.
+### A. Keep DEFAULT_PREAMBLE as a string, prepend date in injectPreamble only
+Pros: minimal change — tests don't need touching.
+Cons: `getPreambleText` (used for logging) would still return the static string without date.
+Also the task explicitly says to change DEFAULT_PREAMBLE itself.
 
-### B. Rename message strings in place (chosen)
-Change existing `logger.info("cron:start", ...)` → `logger.info("[cron] start", ...)`.
-Add new calls where missing. Zero new abstractions, consistent with the existing pattern
-of plain `logger.info(msg, data)` calls. Tests mock logger entirely so message renames
-are safe.
+### B. Make DEFAULT_PREAMBLE a JS getter via Object.defineProperty (chosen pattern for ESM re-exports)
+Pros: zero consumer changes.
+Cons: complex, ESM named exports can't be getters the same way; test comparisons still racy.
 
-### C. Structured log levels (DEBUG/INFO/WARN)
-Add a DEBUG level to logger.ts for tool calls. Rejected: unnecessary complexity; the
-existing INFO level is sufficient for operators tailing the log file.
+### C. Create getPreamble() function, remove DEFAULT_PREAMBLE const, update all usages (chosen)
+Pros: explicit, clean, follows the task spec exactly.
+Cons: tests that do exact `toBe(DEFAULT_PREAMBLE)` need to use fake timers so the dynamic
+ISO timestamp is frozen and deterministic.
 
-## Decision: Approach B
+## Decision: Approach C
 
 ## Files to Touch
-- `src/cron.ts` — rename `cron:xxx` → `[cron] xxx`, add `[cron] fired` at top of fire()
-- `src/agent.ts` — rename `job:xxx` → `[job] xxx`, add `[spawn]` logs, enhance data fields
-- `src/index.ts` — rename `tool:xxx` → `[mcp] xxx`, add startup summary after cronEngine.start()
-
-## What Changes
-
-### cron.ts
-- Prefix all existing `cron:xxx` messages to `[cron] xxx`
-- Add `[cron] fired` at start of `fire()` with id, schedule, intervalMs, prompt[:200]
-
-### agent.ts
-- Prefix all existing `job:xxx` messages to `[job] xxx`
-- `[job] created` — add task[:200] and branch to existing job:spawned
-- `[job] cloning` — add branch field
-- `[job] running` — add pid field
-- `[job] done` — add duration_seconds and output_lines
-- `[job] failed` — add exit_code
-- Add `[spawn] subprocess started` after driver.spawn() — pid, cwd, driver (no token)
-- Add `[spawn] subprocess exited` in exit handler — exit_code
-
-### index.ts
-- Prefix all existing `tool:xxx` messages to `[mcp] xxx`
-- Add startup summary after cronEngine.start():
-  - `[cc-agent] started` with version + namespace
-  - `[cc-agent] startup` with total jobs and per-status counts
-  - `[cc-agent] startup` with cron count
-  - `[cron] registered` for each loaded cron
+- `src/preamble.ts` — create `getPreamble()`, remove `DEFAULT_PREAMBLE` const,
+  update `injectPreamble` and `getPreambleText` to call `getPreamble()`
+- `src/agent.test.ts` — replace `DEFAULT_PREAMBLE` import+usages with `getPreamble()`,
+  add `vi.useFakeTimers()` in the three describe blocks that do exact string comparison
 
 ## Risks
-- Log message renames: tests mock logger entirely — safe
-- duration_seconds computed at job:done before finishedAt is set — use Date.now()
+- Millisecond races in tests: two consecutive `getPreamble()` calls could produce different ISO
+  strings if the millisecond ticks between calls. Mitigated by `vi.useFakeTimers()`.
+- `toLocaleDateString` output is locale-dependent; Node uses ICU data. As long as the runtime
+  has 'en-US' ICU support (it does in standard Node builds) this is fine.

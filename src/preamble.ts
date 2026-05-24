@@ -1,4 +1,9 @@
-export const DEFAULT_PREAMBLE = `## cc-agent workflow (auto-injected — read this first)
+export function getPreamble(): string {
+  const iso = new Date().toISOString();
+  const human = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+  return `## cc-agent workflow (auto-injected — read this first)
+
+**Current date and time: ${iso} (${human})**
 
 You are running inside a temporary git clone of the repository. Follow this workflow exactly:
 
@@ -96,6 +101,7 @@ Scoring guide:
 ---
 
 `;
+}
 
 export const BROWSER_HINT = `\n\n## Browser Tool Available\nUse \`$B URL\` to read any live webpage via Playwright (100ms, real Chromium, ARIA refs). Example: \`$B https://github.com/owner/repo\`\n`;
 
@@ -115,7 +121,7 @@ export function isComplexTask(task: string): boolean {
 
 export function injectPreamble(task: string, customPreamble?: string, noPreamble?: boolean): string {
   if (noPreamble) return task;
-  const preamble = customPreamble ?? DEFAULT_PREAMBLE;
+  const preamble = customPreamble ?? getPreamble();
   let injected = preamble + task;
   if (isComplexTask(task)) {
     injected += `\n\n> **Planning reminder:** This looks like a complex task. Write PLAN.md and TODO.md before writing any code.\n`;
@@ -126,5 +132,5 @@ export function injectPreamble(task: string, customPreamble?: string, noPreamble
 /** Return just the preamble text that would be prepended (for logging). */
 export function getPreambleText(customPreamble?: string, noPreamble?: boolean): string {
   if (noPreamble) return "";
-  return customPreamble ?? DEFAULT_PREAMBLE;
+  return customPreamble ?? getPreamble();
 }

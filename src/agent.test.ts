@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { injectPreamble, getPreambleText, DEFAULT_PREAMBLE } from "./preamble.js";
+import { injectPreamble, getPreambleText, getPreamble } from "./preamble.js";
 
 const { mockIsPidAlive, mockJobStoreLoadAll, mockGetRedis, mockRedisPublish, mockRedisLrange, mockRedisGet, mockRedisXadd, mockRedisXtrim, mockRedisLpop, mockRedisLpush, mockRedisDel, mockRedisExpire, mockRedisFull } = vi.hoisted(() => {
   const mockRedisPublish = vi.fn(async () => 0);
@@ -123,9 +123,17 @@ import { JobManager, extractScore, shouldSkipDocker, DOCKER_PREAMBLE, buildLearn
 import { execFile } from "child_process";
 
 describe("injectPreamble", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("prepends the default preamble to the task", () => {
     const result = injectPreamble("do the thing");
-    expect(result).toBe(DEFAULT_PREAMBLE + "do the thing");
+    expect(result).toBe(getPreamble() + "do the thing");
   });
 
   it("prepends a custom preamble when provided", () => {
@@ -135,13 +143,14 @@ describe("injectPreamble", () => {
 
   it("uses default preamble when customPreamble is undefined", () => {
     const result = injectPreamble("task", undefined);
-    expect(result.startsWith(DEFAULT_PREAMBLE)).toBe(true);
+    expect(result.startsWith(getPreamble())).toBe(true);
   });
 
-  it("DEFAULT_PREAMBLE contains the workflow rules", () => {
-    expect(DEFAULT_PREAMBLE).toContain("cc-agent workflow");
-    expect(DEFAULT_PREAMBLE).toContain("NEVER work directly on main");
-    expect(DEFAULT_PREAMBLE).toContain("gh pr create");
+  it("getPreamble contains the workflow rules", () => {
+    const preamble = getPreamble();
+    expect(preamble).toContain("cc-agent workflow");
+    expect(preamble).toContain("NEVER work directly on main");
+    expect(preamble).toContain("gh pr create");
   });
 });
 
@@ -916,6 +925,14 @@ describe("buildLearningsPreamble", () => {
 // ─── Change 1: Preamble observability ────────────────────────────────────────
 
 describe("injectPreamble — noPreamble flag", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("returns raw task when noPreamble is true", () => {
     const result = injectPreamble("my task", undefined, true);
     expect(result).toBe("my task");
@@ -929,7 +946,7 @@ describe("injectPreamble — noPreamble flag", () => {
 
   it("noPreamble=false uses default preamble", () => {
     const result = injectPreamble("my task", undefined, false);
-    expect(result.startsWith(DEFAULT_PREAMBLE)).toBe(true);
+    expect(result.startsWith(getPreamble())).toBe(true);
   });
 
   it("noPreamble=false uses custom_preamble when provided", () => {
@@ -939,6 +956,14 @@ describe("injectPreamble — noPreamble flag", () => {
 });
 
 describe("getPreambleText", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("returns empty string when noPreamble is true", () => {
     expect(getPreambleText(undefined, true)).toBe("");
     expect(getPreambleText("## custom\n\n", true)).toBe("");
@@ -948,9 +973,9 @@ describe("getPreambleText", () => {
     expect(getPreambleText("## custom\n\n", false)).toBe("## custom\n\n");
   });
 
-  it("returns DEFAULT_PREAMBLE when no custom preamble and noPreamble is false", () => {
-    expect(getPreambleText(undefined, false)).toBe(DEFAULT_PREAMBLE);
-    expect(getPreambleText()).toBe(DEFAULT_PREAMBLE);
+  it("returns getPreamble() when no custom preamble and noPreamble is false", () => {
+    expect(getPreambleText(undefined, false)).toBe(getPreamble());
+    expect(getPreambleText()).toBe(getPreamble());
   });
 });
 
