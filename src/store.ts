@@ -4,6 +4,14 @@ import { homedir } from "os";
 import { getRedis } from "./redis.js";
 import { getNamespace, jobIndexKey } from "./namespace.js";
 import {
+  jobKey,
+  jobOutputKey,
+  profileKey,
+  PROFILES_INDEX,
+  planKey,
+  learningsKey,
+} from "@gonzih/cc-wire";
+import {
   loadPersistedJobs,
   savePersistedJobs,
   appendLog,
@@ -89,7 +97,7 @@ export class JobStore {
     const redis = getRedis();
     if (redis) {
       try {
-        await redis.set(`cca:job:${record.id}`, JSON.stringify(record), "EX", JOB_TTL_SECONDS);
+        await redis.set(jobKey(record.id), JSON.stringify(record), "EX", JOB_TTL_SECONDS);
         await redis.sadd(jobIndexKey(), record.id);
         logger.info("store:saveJob", { id: record.id, status: record.status });
         return;
@@ -108,7 +116,7 @@ export class JobStore {
     const redis = getRedis();
     if (redis) {
       try {
-        const raw = await redis.get(`cca:job:${id}`);
+        const raw = await redis.get(jobKey(id));
         return raw ? (JSON.parse(raw) as JobRecord) : null;
       } catch (err) {
         logger.error("store:getJob Redis failed", err);
@@ -124,7 +132,7 @@ export class JobStore {
         const ids = await redis.smembers(jobIndexKey());
         if (!ids.length) return [];
         const pipeline = redis.pipeline();
-        for (const id of ids) pipeline.get(`cca:job:${id}`);
+        for (const id of ids) pipeline.get(jobKey(id));
         const results = await pipeline.exec();
         const jobs: JobRecord[] = [];
         for (const [, val] of results ?? []) {
@@ -148,7 +156,7 @@ export class JobStore {
     const redis = getRedis();
     if (redis) {
       try {
-        const key = `cca:job:${id}:output`;
+        const key = jobOutputKey(id);
         await redis.rpush(key, line);
         await redis.expire(key, JOB_TTL_SECONDS);
         return;
@@ -163,7 +171,7 @@ export class JobStore {
     const redis = getRedis();
     if (redis) {
       try {
-        return await redis.lrange(`cca:job:${id}:output`, offset, -1);
+        return await redis.lrange(jobOutputKey(id), offset, -1);
       } catch (err) {
         logger.error("store:getOutput Redis failed", err);
       }
@@ -249,8 +257,8 @@ export class ProfileStore {
     const redis = getRedis();
     if (redis) {
       try {
-        await redis.set(`cca:profile:${profile.name}`, JSON.stringify(profile));
-        await redis.sadd("cca:profiles:index", profile.name);
+        await redis.set(profileKey(profile.name), JSON.stringify(profile));
+        await redis.sadd(PROFILES_INDEX, profile.name);
         return;
       } catch (err) {
         logger.error("store:saveProfile Redis failed", err);
@@ -266,7 +274,7 @@ export class ProfileStore {
     const redis = getRedis();
     if (redis) {
       try {
-        const raw = await redis.get(`cca:profile:${name}`);
+        const raw = await redis.get(profileKey(name));
         return raw ? (JSON.parse(raw) as Profile) : null;
       } catch (err) {
         logger.error("store:getProfile Redis failed", err);
@@ -279,7 +287,7 @@ export class ProfileStore {
     const redis = getRedis();
     if (redis) {
       try {
-        const names = await redis.smembers("cca:profiles:index");
+        const names = await redis.smembers(PROFILES_INDEX);
         if (!names.length) {
           // Migrate disk profiles to Redis on first run
           const disk = diskLoadProfiles();
@@ -287,7 +295,7 @@ export class ProfileStore {
           return disk;
         }
         const pipeline = redis.pipeline();
-        for (const name of names) pipeline.get(`cca:profile:${name}`);
+        for (const name of names) pipeline.get(profileKey(name));
         const results = await pipeline.exec();
         const profiles: Profile[] = [];
         for (const [, val] of results ?? []) {
@@ -307,8 +315,8 @@ export class ProfileStore {
     const redis = getRedis();
     if (redis) {
       try {
-        const deleted = await redis.del(`cca:profile:${name}`);
-        await redis.srem("cca:profiles:index", name);
+        const deleted = await redis.del(profileKey(name));
+        await redis.srem(PROFILES_INDEX, name);
         return deleted > 0;
       } catch (err) {
         logger.error("store:deleteProfile Redis failed", err);
@@ -337,7 +345,7 @@ export class PlanStore {
     const redis = getRedis();
     if (redis) {
       try {
-        await redis.set(`cca:plan:${plan.id}`, JSON.stringify(plan), "EX", PLAN_TTL_SECONDS);
+        await redis.set(planKey(plan.id), JSON.stringify(plan), "EX", PLAN_TTL_SECONDS);
         return;
       } catch (err) {
         logger.error("store:savePlan Redis failed", err);
@@ -350,7 +358,7 @@ export class PlanStore {
     const redis = getRedis();
     if (redis) {
       try {
-        const raw = await redis.get(`cca:plan:${id}`);
+        const raw = await redis.get(planKey(id));
         return raw ? (JSON.parse(raw) as PlanRecord) : null;
       } catch (err) {
         logger.error("store:getPlan Redis failed", err);
@@ -368,15 +376,11 @@ const LEARNINGS_TTL_SECONDS = 90 * 24 * 60 * 60; // 90 days
 export class LearningsStore {
   private memLearnings = new Map<string, string[]>(); // namespace → entries (newest first)
 
-  private learningsKey(namespace: string): string {
-    return `cca:learnings:${namespace}`;
-  }
-
   async addLearning(namespace: string, content: string): Promise<void> {
     const redis = getRedis();
     if (redis) {
       try {
-        const key = this.learningsKey(namespace);
+        const key = learningsKey(namespace);
         await redis.lpush(key, content);
         await redis.ltrim(key, 0, LEARNINGS_MAX - 1);
         await redis.expire(key, LEARNINGS_TTL_SECONDS);
@@ -396,7 +400,7 @@ export class LearningsStore {
     const redis = getRedis();
     if (redis) {
       try {
-        return await redis.lrange(this.learningsKey(namespace), 0, limit - 1);
+        return await redis.lrange(learningsKey(namespace), 0, limit - 1);
       } catch (err) {
         logger.error("learnings:getLearnings Redis failed", err);
       }
@@ -408,7 +412,7 @@ export class LearningsStore {
     const redis = getRedis();
     if (redis) {
       try {
-        await redis.del(this.learningsKey(namespace));
+        await redis.del(learningsKey(namespace));
         logger.info("learnings:cleared", { namespace });
         return;
       } catch (err) {
@@ -422,7 +426,7 @@ export class LearningsStore {
     const redis = getRedis();
     if (redis) {
       try {
-        return await redis.llen(this.learningsKey(namespace));
+        return await redis.llen(learningsKey(namespace));
       } catch (err) {
         logger.error("learnings:getLearningsCount Redis failed", err);
       }

@@ -1,4 +1,5 @@
 import { basename } from "path";
+import { jobIndexKey as _jobIndexKey } from "@gonzih/cc-wire";
 
 /**
  * Resolves the current namespace for job queue isolation.
@@ -21,5 +22,5 @@ export function getNamespace(): string {
 
 /** Returns the namespaced Redis key for the job index set. */
 export function jobIndexKey(namespace = getNamespace()): string {
-  return `cca:jobs:${namespace}`;
+  return _jobIndexKey(namespace);
 }

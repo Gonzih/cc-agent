@@ -7,9 +7,16 @@ import { v4 as randomUUID } from "uuid";
 import { getRedis } from "./redis.js";
 import { logger } from "./logger.js";
 import { injectMcpConfig } from "./mcp-inject.js";
+import {
+  META_AGENTS_INDEX,
+  metaKey,
+  metaAgentStatusKey,
+  chatOutgoingChannel,
+  metaInputKey,
+  chatLogKey,
+} from "@gonzih/cc-wire";
 
 const META_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
-const META_AGENTS_INDEX = "cca:meta:agents:index";
 const STATUS_REDIS_TTL = 7 * 24 * 60 * 60; // 7 days
 
 export interface MetaAgentInfo {
@@ -46,26 +53,6 @@ export class MetaAgentManager {
   private liveStatus = new Map<string, LiveStatus>();
   private pollerHandle: ReturnType<typeof setInterval> | null = null;
 
-  private metaKey(namespace: string): string {
-    return `cca:meta:${namespace}`;
-  }
-
-  private statusKey(namespace: string): string {
-    return `cca:meta-agent:status:${namespace}`;
-  }
-
-  private outChannel(namespace: string): string {
-    return `cca:chat:outgoing:${namespace}`;
-  }
-
-  private inputKey(namespace: string): string {
-    return `cca:meta:${namespace}:input`;
-  }
-
-  private logKey(namespace: string): string {
-    return `cca:chat:log:${namespace}`;
-  }
-
   /** Start the global background poller that drains per-namespace input queues every 3s. */
   startPoller(): void {
     if (this.pollerHandle) return;
@@ -90,7 +77,7 @@ export class MetaAgentManager {
       for (const ns of namespaces) {
         // One message at a time per namespace — skip if already processing.
         if (this.activeProcesses.has(ns)) continue;
-        const raw = await redis.rpop(this.inputKey(ns));
+        const raw = await redis.rpop(metaInputKey(ns));
         if (!raw) continue;
         let content: string;
         try {
@@ -112,10 +99,10 @@ export class MetaAgentManager {
           chatId: 0,
         });
         // NOTE: cca:chat:log:{ns} is LIFO (newest first via LPUSH) — consumers must reverse for chronological display
-        redis.lpush(this.logKey(ns), coordinatorEntry).catch(() => {});
-        redis.ltrim(this.logKey(ns), 0, CHAT_LOG_MAX).catch(() => {});
+        redis.lpush(chatLogKey(ns), coordinatorEntry).catch(() => {});
+        redis.ltrim(chatLogKey(ns), 0, CHAT_LOG_MAX).catch(() => {});
         // Protocol: every LPUSH to chat:log must also PUBLISH to chat:outgoing
-        redis.publish(this.outChannel(ns), coordinatorEntry).catch(() => {});
+        redis.publish(chatOutgoingChannel(ns), coordinatorEntry).catch(() => {});
         this.messageMetaAgent(ns, content).catch((err) => {
           logger.warn("meta-agent:poller-message-failed", { namespace: ns, err: String(err) });
         });
@@ -177,7 +164,7 @@ export class MetaAgentManager {
 
     // Drain stale input queue if any (legacy key, no longer used by tool handler)
     const redis = getRedis();
-    if (redis) await redis.del(this.inputKey(namespace)).catch(() => {});
+    if (redis) await redis.del(metaInputKey(namespace)).catch(() => {});
 
     this.liveStatus.set(namespace, {
       isTyping: false,
@@ -386,7 +373,7 @@ export class MetaAgentManager {
         turnCount: ls.turnCount,
         updatedAt: new Date().toISOString(),
       };
-      await redis.set(this.statusKey(namespace), JSON.stringify(payload), "EX", STATUS_REDIS_TTL);
+      await redis.set(metaAgentStatusKey(namespace), JSON.stringify(payload), "EX", STATUS_REDIS_TTL);
     } catch (err) {
       logger.warn("meta-agent:write-live-status-failed", { namespace, err: String(err) });
     }
@@ -406,10 +393,10 @@ export class MetaAgentManager {
       chatId: 0,
     });
     try {
-      await redis.publish(this.outChannel(namespace), message);
+      await redis.publish(chatOutgoingChannel(namespace), message);
       // NOTE: cca:chat:log:{ns} is LIFO (newest first via LPUSH) — consumers must reverse for chronological display
-      await redis.lpush(this.logKey(namespace), message);
-      await redis.ltrim(this.logKey(namespace), 0, CHAT_LOG_MAX);
+      await redis.lpush(chatLogKey(namespace), message);
+      await redis.ltrim(chatLogKey(namespace), 0, CHAT_LOG_MAX);
     } catch (err) {
       logger.warn("meta-agent:publish-failed", { namespace, err: String(err) });
     }
@@ -419,7 +406,7 @@ export class MetaAgentManager {
     const redis = getRedis();
     if (!redis) return;
     try {
-      await redis.set(this.metaKey(state.namespace), JSON.stringify(state), "EX", META_TTL_SECONDS);
+      await redis.set(metaKey(state.namespace), JSON.stringify(state), "EX", META_TTL_SECONDS);
       await redis.sadd(META_AGENTS_INDEX, state.namespace);
     } catch (err) {
       logger.error("meta-agent:save-state-failed", { namespace: state.namespace, err: String(err) });
@@ -430,7 +417,7 @@ export class MetaAgentManager {
     const redis = getRedis();
     if (!redis) return null;
     try {
-      const raw = await redis.get(this.metaKey(namespace));
+      const raw = await redis.get(metaKey(namespace));
       if (!raw) return null;
       const state = JSON.parse(raw) as MetaAgentInfo;
       // Reflect live process state
@@ -458,12 +445,12 @@ export class MetaAgentManager {
     const redis = getRedis();
     if (!redis) return;
     try {
-      const raw = await redis.get(this.metaKey(namespace));
+      const raw = await redis.get(metaKey(namespace));
       if (!raw) return;
       const state = JSON.parse(raw) as MetaAgentInfo;
       state.status = status;
       if (status === "idle") state.pid = undefined;
-      await redis.set(this.metaKey(namespace), JSON.stringify(state), "EX", META_TTL_SECONDS);
+      await redis.set(metaKey(namespace), JSON.stringify(state), "EX", META_TTL_SECONDS);
     } catch (err) {
       logger.error("meta-agent:update-status-failed", { namespace, err: String(err) });
     }

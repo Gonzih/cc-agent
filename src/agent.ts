@@ -17,6 +17,15 @@ import { isDockerAvailable, runDockerAgent, getDockerEnv } from "./docker.js";
 import { getCurrentToken, rotateToken, getTokenStatus, resetTokens } from "./tokens.js";
 import { getRedis } from "./redis.js";
 import { injectMcpConfig, repoKeyFromUrl } from "./mcp-inject.js";
+import {
+  jobOutputKey,
+  coordinatorPlanKey,
+  EVENT_STREAM,
+  jobDoneChannel,
+  jobDoneQueueKey,
+  jobSignalKey,
+  jobInputKey,
+} from "@gonzih/cc-wire";
 
 const execFileAsync = promisify(execFile);
 
@@ -500,8 +509,8 @@ export class JobManager {
     (async () => {
       try {
         const [lastLines, planRaw] = await Promise.all([
-          redis.lrange(`cca:job:${job.id}:output`, -5, -1),
-          redis.get(`cca:coordinator:plan:${job.id}`),
+          redis.lrange(jobOutputKey(job.id), -5, -1),
+          redis.get(coordinatorPlanKey(job.id)),
         ]);
         const event: JobEvent = {
           jobId: job.id,
@@ -522,7 +531,7 @@ export class JobManager {
         // Write to Redis Stream for durability (fire-and-forget, never crash on failure)
         try {
           await redis.xadd(
-            'cca:event-stream', '*',
+            EVENT_STREAM, '*',
             'jobId', event.jobId,
             'status', event.status,
             'title', event.title,
@@ -532,7 +541,7 @@ export class JobManager {
             'score', event.score !== undefined ? String(event.score) : '',
             'timestamp', event.timestamp, // ISO 8601 string — XADD requires string values
           );
-          await redis.xtrim('cca:event-stream', 'MAXLEN', '~', '500');
+          await redis.xtrim(EVENT_STREAM, 'MAXLEN', '~', '500');
         } catch (streamErr) {
           logger.warn('[job] stream-write-failed', { id: job.id, err: String(streamErr) });
         }
@@ -554,8 +563,8 @@ export class JobManager {
   private publishJobDone(job: Job): void {
     const redis = getRedis();
     if (!redis) return;
-    const channel = `cca:job:done:${job.id}`;
-    const queueKey = `cca:job:done:${job.id}:queue`;
+    const channel = jobDoneChannel(job.id);
+    const queueKey = jobDoneQueueKey(job.id);
     const payload = JSON.stringify({
       job_id: job.id,
       status: job.status,
@@ -956,9 +965,9 @@ export class JobManager {
           // Poll cca:job:{id}:signal every 4s for cancel/wake
           signalPoller = setInterval(async () => {
             try {
-              const sig = await redis.get(`cca:job:${job.id}:signal`);
+              const sig = await redis.get(jobSignalKey(job.id));
               if (!sig) return;
-              await redis.del(`cca:job:${job.id}:signal`);
+              await redis.del(jobSignalKey(job.id));
               if (sig === 'cancel') {
                 stopPollers();
                 job.status = 'cancelled';
@@ -977,7 +986,7 @@ export class JobManager {
           inputPoller = setInterval(async () => {
             try {
               if (!agentProc.writeStdin) return;
-              const raw = await redis.rpop(`cca:job:${job.id}:input`);
+              const raw = await redis.rpop(jobInputKey(job.id));
               if (raw) {
                 let content: string;
                 try {
@@ -1348,9 +1357,9 @@ export class JobManager {
       const wakePoller = setInterval(async () => {
         if (job.status !== 'sleeping') { clearInterval(wakePoller); return; }
         try {
-          const sig = await redis.get(`cca:job:${job.id}:signal`);
+          const sig = await redis.get(jobSignalKey(job.id));
           if (sig === 'wake') {
-            await redis.del(`cca:job:${job.id}:signal`);
+            await redis.del(jobSignalKey(job.id));
             clearInterval(wakePoller);
             const t = this.wakeTimers.get(job.id);
             if (t) { clearTimeout(t); this.wakeTimers.delete(job.id); }
@@ -1486,7 +1495,7 @@ export class JobManager {
     const redis = getRedis();
     if (!redis) return { ok: false, error: "Redis not available" };
     const entry = JSON.stringify({ id: uuidv4(), content: message, timestamp: new Date().toISOString() });
-    await redis.lpush(`cca:job:${id}:input`, entry);
+    await redis.lpush(jobInputKey(id), entry);
     return { ok: true };
   }
 
