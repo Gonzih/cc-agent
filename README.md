@@ -1,6 +1,6 @@
 # cc-agent
 
-<img src="assets/logo.png" alt="AMAI" width="120">
+<img src="assets/logo.png" alt="cc-agent" width="120">
 
 [![npm version](https://img.shields.io/npm/v/@gonzih/cc-agent?label=@gonzih/cc-agent)](https://www.npmjs.com/package/@gonzih/cc-agent)
 
