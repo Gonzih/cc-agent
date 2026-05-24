@@ -15,6 +15,7 @@ import { getRedis } from "./redis.js";
 import { logger } from "./logger.js";
 import { notify } from "./coordinator.js";
 import { metaAgentManager } from "./meta-agent.js";
+import { cronsKey, deletedCronsKey } from "@gonzih/cc-wire";
 
 export interface CronJob {
   id: string;
@@ -108,16 +109,6 @@ export class CronEngine {
   private readonly firedOnStartup = new Set<string>();
 
   constructor(private manager: JobManager, private namespace: string) {}
-
-  /** Crons Redis key for this namespace. */
-  private redisKey(): string {
-    return `cca:crons:${this.namespace}`;
-  }
-
-  /** Tombstone set key — deleted cron ids, TTL 7 days. */
-  private deletedKey(): string {
-    return `cca:deleted-crons:${this.namespace}`;
-  }
 
   async start(): Promise<void> {
     if (this.running) return;
@@ -247,7 +238,7 @@ export class CronEngine {
   private async updateLastFired(id: string): Promise<void> {
     const redis = getRedis();
     if (!redis) return;
-    await redis.eval(UPDATE_LAST_FIRED_LUA, 1, this.redisKey(), id, new Date().toISOString());
+    await redis.eval(UPDATE_LAST_FIRED_LUA, 1, cronsKey(this.namespace), id, new Date().toISOString());
   }
 
   // ---------------------------------------------------------------------------
@@ -258,8 +249,8 @@ export class CronEngine {
     const redis = getRedis();
     if (!redis) return [];
     const [raw, deletedMembers] = await Promise.all([
-      redis.get(this.redisKey()),
-      redis.smembers(this.deletedKey()),
+      redis.get(cronsKey(this.namespace)),
+      redis.smembers(deletedCronsKey(this.namespace)),
     ]);
     if (!raw) return [];
     try {
@@ -279,7 +270,7 @@ export class CronEngine {
       createdAt: new Date().toISOString(),
     };
     if (redis) {
-      await redis.eval(ADD_CRON_LUA, 1, this.redisKey(), JSON.stringify(newCron));
+      await redis.eval(ADD_CRON_LUA, 1, cronsKey(this.namespace), JSON.stringify(newCron));
     }
     logger.info("[cron] added", { id: newCron.id, schedule: newCron.schedule, intervalMs: newCron.intervalMs });
     return newCron;
@@ -288,10 +279,10 @@ export class CronEngine {
   async deleteCron(id: string): Promise<boolean> {
     const redis = getRedis();
     if (!redis) return false;
-    const found = await redis.eval(DELETE_CRON_LUA, 1, this.redisKey(), id);
+    const found = await redis.eval(DELETE_CRON_LUA, 1, cronsKey(this.namespace), id);
     if (found === 1) {
-      await redis.sadd(this.deletedKey(), id);
-      await redis.expire(this.deletedKey(), 7 * 24 * 3600);
+      await redis.sadd(deletedCronsKey(this.namespace), id);
+      await redis.expire(deletedCronsKey(this.namespace), 7 * 24 * 3600);
       logger.info("[cron] deleted", { id });
     }
     return found === 1;
@@ -300,7 +291,7 @@ export class CronEngine {
   async updateCron(id: string, updates: Partial<CronJob>): Promise<CronJob | null> {
     const redis = getRedis();
     if (!redis) return null;
-    const found = await redis.eval(UPDATE_CRON_LUA, 1, this.redisKey(), id, JSON.stringify(updates));
+    const found = await redis.eval(UPDATE_CRON_LUA, 1, cronsKey(this.namespace), id, JSON.stringify(updates));
     if (!found) return null;
     // Read back the merged cron — we need the full object as the return value
     const crons = await this.listCrons();
@@ -310,7 +301,7 @@ export class CronEngine {
   private async saveCrons(crons: CronJob[]): Promise<void> {
     const redis = getRedis();
     if (!redis) return;
-    await redis.set(this.redisKey(), JSON.stringify(crons));
+    await redis.set(cronsKey(this.namespace), JSON.stringify(crons));
   }
 
   // ---------------------------------------------------------------------------

@@ -1,14 +1,19 @@
-# TODO — inject cc-agent MCP into every agent workspace
+# TODO — migrate cc-agent to @gonzih/cc-wire
 
 - [x] Write PLAN.md and TODO.md
-- [x] git checkout -b feat/inject-cc-agent-mcp
-- [ ] Create src/mcp-inject.ts (injectMcpConfig helper)
-- [ ] Create src/mcp-inject.test.ts (unit tests)
-- [ ] Modify src/agent.ts: call injectMcpConfig before driver.spawn()
-- [ ] Modify src/meta-agent.ts: call injectMcpConfig before spawn()
-- [ ] npm install && npm run build
-- [ ] npm test (all pass)
-- [ ] git add specific files && git diff --staged (review carefully)
-- [ ] git commit + git push -u origin feat/inject-cc-agent-mcp
+- [x] git checkout -b feat/cc-wire-migration
+- [x] Clone cc-wire, add deletedCronsKey + JOB_INDEX_GLOB + JOB_INDEX_PREFIX
+- [x] Bump cc-wire to 0.1.1, push, publish
+- [x] Add @gonzih/cc-wire to cc-agent package.json and npm install
+- [x] Migrate src/tokens.ts
+- [x] Migrate src/namespace.ts
+- [x] Migrate src/coordinator.ts
+- [x] Migrate src/meta-agent.ts
+- [x] Migrate src/cron.ts
+- [x] Migrate src/store.ts
+- [x] Migrate src/agent.ts
+- [x] Migrate src/swarm.ts
+- [x] Migrate src/index.ts
+- [x] npm test — 312 pass, 12 pre-existing redis.del mock failures
+- [ ] git diff --staged, commit, push, npm version patch, npm publish
 - [ ] gh pr create + gh pr merge --squash --auto
-- [ ] npm version patch && git push --follow-tags && npm publish --access public

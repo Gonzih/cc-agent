@@ -39,6 +39,18 @@ import { Coordinator } from "./coordinator.js";
 import { CronEngine } from "./cron.js";
 import { listCcAgentContainers } from "./docker.js";
 import { loadTokens, getTokenStatus } from "./tokens.js";
+import {
+  coordinatorPlanKey,
+  jobDoneChannel,
+  notifyLogKey,
+  JOB_INDEX_GLOB,
+  JOB_INDEX_PREFIX,
+  jobKey,
+  notifyChannel,
+  chatIncomingChannel,
+  chatOutgoingChannel,
+  CC_AGENT_VERSION_KEY,
+} from "@gonzih/cc-wire";
 import { v4 as uuidv4 } from "uuid";
 import { execFile } from "child_process";
 import { promisify } from "util";
@@ -859,7 +871,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (redis) {
           try {
             await redis.set(
-              `cca:coordinator:plan:${jobId}`,
+              coordinatorPlanKey(jobId),
               JSON.stringify(a.coordinator_plan),
               'EX',
               7 * 24 * 3600,
@@ -953,7 +965,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
               approval_issue_url: job.approvalIssueUrl,
               score: job.score ?? null,
               score_source: job.scoreSource ?? null,
-              pub_sub_channel: `cca:job:done:${job.id}`,
+              pub_sub_channel: jobDoneChannel(job.id),
             }),
           },
         ],
@@ -995,7 +1007,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
               exit_code: waitRecord.exitCode ?? null,
               error: waitRecord.error ?? null,
               cost_usd: waitRecord.costUsd ?? null,
-              pub_sub_channel: `cca:job:done:${waitJobId}`,
+              pub_sub_channel: jobDoneChannel(waitJobId),
             }),
           },
         ],
@@ -1571,7 +1583,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       const redis = getRedis();
       let messages: string[] = [];
       if (redis) {
-        messages = await redis.lrange(`cca:notify-log:${ns}`, 0, 19);
+        messages = await redis.lrange(notifyLogKey(ns), 0, 19);
       }
       return { content: [{ type: "text", text: JSON.stringify({ messages, total: messages.length, namespace: ns }) }] };
     }
@@ -1581,7 +1593,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       const redis = getRedis();
       if (!redis) return { content: [{ type: "text", text: "Redis unavailable" }] };
 
-      const keys = await redis.keys("cca:jobs:*");
+      const keys = await redis.keys(JOB_INDEX_GLOB);
       const namespaces: Array<{
         namespace: string;
         total_jobs: number;
@@ -1592,11 +1604,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
       for (const key of keys) {
         if (key.includes(":index")) continue;
-        const ns = key.replace("cca:jobs:", "");
+        const ns = key.replace(JOB_INDEX_PREFIX, "");
         const jobIds = await redis.smembers(key);
 
         const pipeline = redis.pipeline();
-        for (const id of jobIds) pipeline.get(`cca:job:${id}`);
+        for (const id of jobIds) pipeline.get(jobKey(id));
         const results = await pipeline.exec();
 
         const jobs = (results ?? [])
@@ -1653,9 +1665,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           text: JSON.stringify({
             active_channels: channelCounts,
             expected_channels: [
-              `cca:notify:${ns}`,
-              `cca:chat:incoming:${ns}`,
-              `cca:chat:outgoing:${ns}`,
+              notifyChannel(ns),
+              chatIncomingChannel(ns),
+              chatOutgoingChannel(ns),
             ],
           }, null, 2),
         }],
@@ -1985,7 +1997,7 @@ process.on('unhandledRejection', (reason) => {
 await initRedis();
 const redis = getRedis();
 if (redis) {
-  await redis.set('cca:meta:cc-agent:version', PKG_VERSION);
+  await redis.set(CC_AGENT_VERSION_KEY, PKG_VERSION);
   logger.info(`[cc-agent] version ${PKG_VERSION} written to Redis`);
 }
 await manager.init();

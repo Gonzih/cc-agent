@@ -11,9 +11,13 @@ import type { JobManager } from "./agent.js";
 import type { CoordinatorPlan, JobEvent } from "./types.js";
 import { getRedis } from "./redis.js";
 import { logger } from "./logger.js";
+import {
+  EVENT_STREAM as STREAM_KEY,
+  COORDINATOR_GROUP,
+  notifyChannel,
+  notifyLogKey,
+} from "@gonzih/cc-wire";
 
-const STREAM_KEY = "cca:event-stream";
-const COORDINATOR_GROUP = "coordinator";
 const COORDINATOR_POLL_MS = 2000;
 const LOW_SCORE_THRESHOLD = 0.5;
 
@@ -24,9 +28,9 @@ export async function notify(namespace: string, text: string): Promise<void> {
   // Protocol: NotificationPayload must be JSON { text, driver?, model?, cost? }
   const payload = JSON.stringify({ text });
   try {
-    await redis.publish(`cca:notify:${namespace}`, payload);
-    await redis.lpush(`cca:notify-log:${namespace}`, payload);
-    await redis.ltrim(`cca:notify-log:${namespace}`, 0, 99);
+    await redis.publish(notifyChannel(namespace), payload);
+    await redis.lpush(notifyLogKey(namespace), payload);
+    await redis.ltrim(notifyLogKey(namespace), 0, 99);
   } catch (err) {
     logger.warn("coordinator:notify-failed", { namespace, err: String(err) });
   }

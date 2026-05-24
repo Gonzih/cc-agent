@@ -1,7 +1,6 @@
 import { getRedis } from "./redis.js";
 import { logger } from "./logger.js";
-
-const TOKEN_INDEX_KEY = "cca:token:index";
+import { TOKEN_INDEX_KEY } from "@gonzih/cc-wire";
 
 export interface TokenStatus {
   index: number;

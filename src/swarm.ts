@@ -10,6 +10,7 @@ import { v4 as uuidv4 } from "uuid";
 import type { Redis } from "ioredis";
 import type { JobManager } from "./agent.js";
 import { logger } from "./logger.js";
+import { swarmKey, jobKey } from "@gonzih/cc-wire";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -69,7 +70,7 @@ const memSwarms = new Map<string, SwarmRecord>();
 async function saveSwarm(redis: Redis | null, record: SwarmRecord): Promise<void> {
   if (redis) {
     try {
-      await redis.set(`cca:swarm:${record.swarm_id}`, JSON.stringify(record), "EX", SWARM_TTL_SECONDS);
+      await redis.set(swarmKey(record.swarm_id), JSON.stringify(record), "EX", SWARM_TTL_SECONDS);
       return;
     } catch (err) {
       logger.error("swarm:save-failed", { swarm_id: record.swarm_id, err: String(err) });
@@ -81,7 +82,7 @@ async function saveSwarm(redis: Redis | null, record: SwarmRecord): Promise<void
 async function loadSwarm(redis: Redis | null, swarmId: string): Promise<SwarmRecord | null> {
   if (redis) {
     try {
-      const raw = await redis.get(`cca:swarm:${swarmId}`);
+      const raw = await redis.get(swarmKey(swarmId));
       return raw ? (JSON.parse(raw) as SwarmRecord) : null;
     } catch (err) {
       logger.error("swarm:load-failed", { swarm_id: swarmId, err: String(err) });
@@ -410,7 +411,7 @@ async function fetchJobRecord(
 ): Promise<{ status: string; costUsd?: number } | null> {
   if (!redis) return null;
   try {
-    const raw = await redis.get(`cca:job:${jobId}`);
+    const raw = await redis.get(jobKey(jobId));
     if (!raw) return null;
     return JSON.parse(raw) as { status: string; costUsd?: number };
   } catch {

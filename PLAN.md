@@ -1,57 +1,51 @@
-# Plan: Inject cc-agent MCP into every agent workspace
+# Plan: Migrate cc-agent off hardcoded Redis channel strings onto @gonzih/cc-wire
 
 ## Task Restatement
-Every Claude Code session launched by cc-agent (both job agents and meta-agents) should
-have the cc-agent MCP server available in the workspace `.mcp.json`. Currently only repos
-that manually add it get access. We want all spawned agents to be able to call cc-agent
-tools (spawn_agent, etc.) without any manual setup.
+Every Redis key/channel string with the `cca:` prefix is currently hardcoded in cc-agent
+source files. We need to replace them all with imports from `@gonzih/cc-wire`, which is
+the single source of truth for Redis key patterns across the cc-* suite. This is a pure
+string-constant refactor — zero behavior change.
 
-## Approach
+## Approaches
 
-### Option A: Inject in claude.ts (runClaude)
-- Pro: one injection point for all Claude-based drivers
-- Con: `runClaude` doesn't know the repo key / namespace; would need it passed as a new param,
-  rippling changes through driver interface and all callers
+### Option A: Global search-replace with sed
+- Pro: fast for simple patterns
+- Con: brittle for template literals, misses import wiring, hard to verify
 
-### Option B: Inject in agent.ts (before driver.spawn) + meta-agent.ts (before spawn)
-- Pro: both call sites already have `workDir`/`cwd` and a namespace/repoUrl — zero interface changes
-- Con: two injection points, but they're already the two distinct code paths
+### Option B: File-by-file manual edit with full import wiring
+- Pro: each file's intent stays clear; imports grouped sensibly; easy to review per-file
+- Con: more edits, but this is necessary for correctness
 
-### Option C: Inject as a post-clone step in agent.ts only; skip meta-agents
-- Pro: simplest diff
-- Con: meta-agents would still lack MCP access — violates the goal
+### Option C: Code-gen / AST transform
+- Pro: systematic
+- Con: overkill, no AST tool available, manual is fast enough given clear grep output
 
-**Chosen: Option B** — inject at both spawn sites, keep changes local to each file.
+**Chosen: Option B** — file-by-file manual edit with full import wiring.
 
-## Implementation
+## Missing from cc-wire 0.1.0
+- `deletedCronsKey(namespace)` → `cca:deleted-crons:${namespace}` (used in cron.ts)
+- `JOB_INDEX_GLOB = "cca:jobs:*"` (used in index.ts redis.keys call)
+- `JOB_INDEX_PREFIX = "cca:jobs:"` (used in index.ts key.replace call)
 
-### New file: `src/mcp-inject.ts`
-```
-injectMcpConfig(cwd: string, namespace: string): void
-```
-- Read `CLAUDE_CODE_OAUTH_TOKEN` / `CLAUDE_TOKENS` via `loadTokens()[0]`
-- If no token: log and return (graceful skip)
-- Read `.mcp.json` in `cwd` (or start with `{mcpServers:{}}`)
-- Add/overwrite `mcpServers["cc-agent"]` with npx entry + env
-- Write back — never removes existing entries
+These must be added to cc-wire first, version bumped to 0.1.1, and published.
 
-### In `src/agent.ts`
-- Call `injectMcpConfig(workDir!, repoKeyFromUrl(job.repoUrl))` just before `driver.spawn()`
-- `repoKeyFromUrl`: parse last two path segments of repoUrl (e.g. `gonzih/cc-tg`)
+## Files to Touch in cc-agent
+- `src/tokens.ts` — remove `TOKEN_INDEX_KEY`, import from cc-wire
+- `src/namespace.ts` — remove local `jobIndexKey` impl, import from cc-wire
+- `src/coordinator.ts` — remove `STREAM_KEY`, `COORDINATOR_GROUP`, import from cc-wire
+- `src/meta-agent.ts` — remove `META_AGENTS_INDEX` + 5 private key builders, import from cc-wire
+- `src/cron.ts` — remove `redisKey()` / `deletedKey()` methods, import from cc-wire
+- `src/store.ts` — replace all `cca:job:`, `cca:profile:`, `cca:plan:`, `cca:learnings:`, `cca:profiles:index`
+- `src/agent.ts` — replace `cca:job:*:output`, `cca:coordinator:plan:*`, `cca:event-stream`, `cca:job:done:*`, signal/input keys
+- `src/swarm.ts` — replace `cca:swarm:*` and `cca:job:*`
+- `src/index.ts` — replace coordinator plan key, job done channels, notify channels, chat channels, version key, list_active_repos patterns
 
-### In `src/meta-agent.ts`
-- Call `injectMcpConfig(cwd, namespace)` just before `spawn("claude", claudeArgs, ...)`
-
-## Files to Touch
-- `src/mcp-inject.ts` (new)
-- `src/mcp-inject.test.ts` (new)
-- `src/agent.ts` (~line 902)
-- `src/meta-agent.ts` (~line 239)
+## Not Migrating (out of scope)
+- `"cca:*"` pubsub wildcard in index.ts — general glob, not a specific channel
+- String literals inside description fields / text messages (not Redis calls)
+- Numeric TTL and CAP constants (not channel strings)
 
 ## Risks
-- Token changes: we always use `loadTokens()[0]` (the server's first token), not the
-  per-job rotated token — this is intentional: injected MCP uses the server credential
-- If `.mcp.json` is malformed JSON: we log and overwrite with a clean entry
-- Race condition: two jobs in the same workDir — workDirs are unique temp dirs so no conflict
-- meta-agent workDir: shared across messages — concurrent writes are possible but rare
-  and last-write-wins is acceptable for an idempotent config entry
+- Import cycles: cc-wire has no runtime deps so no cycle risk
+- cc-wire publish may fail if npm creds unavailable — user would need to publish manually
+- One missing constant (`deletedCronsKey`) must land in cc-wire before cc-agent migration
