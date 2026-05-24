@@ -26,6 +26,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { JobManager, repoKey, normalizeRepoUrl } from "./agent.js";
 import { listDrivers, getDriverStatus } from "./drivers/index.js";
+import { runSwarm, getSwarmStatus, SWARM_MAX_AGENTS_HARD_CAP } from "./swarm.js";
 import { MetaAgentManager } from "./meta-agent.js";
 import { buildEvaluatorTask } from "./evaluator.js";
 import { loadProfiles, upsertProfile, deleteProfile, getProfile, interpolate } from "./profiles.js";
@@ -756,6 +757,60 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           status: { type: "string", description: "Filter by status: 'done' | 'failed' | 'cancelled' | 'running' (optional)" },
         },
         required: ["query"],
+      },
+    },
+    {
+      name: "swarm_task",
+      description:
+        "Auto-decompose a high-level goal into N parallel sub-tasks, fan out agents across all of them, then run a synthesis agent that produces one unified deliverable. Returns immediately with swarm_id and sub_job_ids. Use get_swarm_status to poll progress.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo_url: {
+            type: "string",
+            description: "GitHub repo URL for all sub-agents and the synthesis agent",
+          },
+          goal: {
+            type: "string",
+            description: "High-level goal to decompose and execute across parallel agents",
+          },
+          max_agents: {
+            type: "number",
+            description: `Maximum number of parallel sub-agents (default 10, hard cap ${SWARM_MAX_AGENTS_HARD_CAP})`,
+          },
+          synthesis_output: {
+            type: "string",
+            description: "Path in the repo where the synthesis agent writes its deliverable (default: swarm-synthesis.md)",
+          },
+          synthesis_prompt: {
+            type: "string",
+            description: "Custom instruction for the synthesis agent. Defaults to: review all outputs and write a unified deliverable.",
+          },
+          max_budget_per_agent: {
+            type: "number",
+            description: "Max USD budget per agent (sub-agents and synthesis). Default 5.",
+          },
+          agent_model: {
+            type: "string",
+            description: "Model override for all spawned agents (optional)",
+          },
+          agent_driver: {
+            type: "string",
+            description: "Driver for all spawned agents (optional, default: claude)",
+          },
+        },
+        required: ["repo_url", "goal"],
+      },
+    },
+    {
+      name: "get_swarm_status",
+      description: "Poll the status of a swarm created by swarm_task. Returns goal, status (running_subs | synthesizing | done | failed), sub_job counts, and synthesis_job_id once spawned.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          swarm_id: { type: "string", description: "Swarm ID returned by swarm_task" },
+        },
+        required: ["swarm_id"],
       },
     },
   ],
@@ -1818,6 +1873,97 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         content: [{
           type: "text",
           text: JSON.stringify({ query: a.query, days, total: matches.length, matches }),
+        }],
+      };
+    }
+
+    case "swarm_task": {
+      const repoUrl = normalizeRepoUrl(a.repo_url as string);
+      const goal = a.goal as string;
+      const maxAgents = typeof a.max_agents === "number" ? a.max_agents : 10;
+
+      if (maxAgents > SWARM_MAX_AGENTS_HARD_CAP) {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ error: `max_agents ${maxAgents} exceeds hard cap of ${SWARM_MAX_AGENTS_HARD_CAP}` }),
+          }],
+        };
+      }
+
+      logger.info("[mcp] swarm_task", { repo_url: repoUrl, goal: goal.slice(0, 80), max_agents: maxAgents });
+
+      try {
+        const result = await runSwarm({
+          repoUrl,
+          goal,
+          maxAgents,
+          synthesisOutput: a.synthesis_output as string | undefined,
+          synthesisPrompt: a.synthesis_prompt as string | undefined,
+          maxBudgetPerAgent: typeof a.max_budget_per_agent === "number" ? a.max_budget_per_agent : 5,
+          agentModel: a.agent_model as string | undefined,
+          agentDriver: a.agent_driver as string | undefined,
+          manager,
+          redis: getRedis(),
+          getJobOutput: (id, offset) => jobStore.getOutput(id, offset),
+        });
+
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              swarm_id: result.swarm_id,
+              sub_job_ids: result.sub_job_ids,
+              decomposed_tasks: result.decomposed_tasks,
+              status: result.status,
+              message: `Swarm started with ${result.sub_job_ids.length} sub-agents. Use get_swarm_status to poll progress.`,
+            }),
+          }],
+        };
+      } catch (err) {
+        logger.error("[mcp] swarm_task failed", { err: String(err) });
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ error: String(err) }),
+          }],
+        };
+      }
+    }
+
+    case "get_swarm_status": {
+      const swarmId = a.swarm_id as string;
+      logger.info("[mcp] get_swarm_status", { swarm_id: swarmId });
+
+      const record = await getSwarmStatus(swarmId, getRedis());
+      if (!record) {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ error: `Swarm '${swarmId}' not found` }),
+          }],
+        };
+      }
+
+      const subJobsDone = record.sub_job_ids.length;
+      const subJobsFailed = 0; // detailed counts require Redis lookup; status field covers this
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            swarm_id: record.swarm_id,
+            goal: record.goal,
+            status: record.status,
+            sub_job_ids: record.sub_job_ids,
+            sub_jobs_total: record.sub_job_ids.length,
+            synthesis_job_id: record.synthesis_job_id ?? null,
+            synthesis_output: record.synthesis_output,
+            decomposed_tasks: record.decomposed_tasks,
+            created_at: record.created_at,
+            completed_at: record.completed_at ?? null,
+            error: record.error ?? null,
+          }),
         }],
       };
     }
