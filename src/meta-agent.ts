@@ -6,6 +6,7 @@ import { execSync } from "child_process";
 import { v4 as randomUUID } from "uuid";
 import { getRedis } from "./redis.js";
 import { logger } from "./logger.js";
+import { injectMcpConfig } from "./mcp-inject.js";
 
 const META_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
 const META_AGENTS_INDEX = "cca:meta:agents:index";
@@ -218,6 +219,9 @@ export class MetaAgentManager {
     const claudeArgs = sessionExists
       ? ["--continue", "-p", message, "--dangerously-skip-permissions"]
       : ["-p", message, "--dangerously-skip-permissions"];
+
+    // Inject cc-agent MCP so the meta-agent can call spawn_agent etc.
+    injectMcpConfig(cwd, namespace);
 
     // Update lastMessageAt and mark running.
     state.lastMessageAt = new Date().toISOString();

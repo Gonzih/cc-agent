@@ -1,14 +1,14 @@
-# TODO — swarm_task + get_swarm_status
+# TODO — inject cc-agent MCP into every agent workspace
 
 - [x] Write PLAN.md and TODO.md
-- [ ] git checkout -b feat/swarm-task
-- [ ] Implement src/swarm.ts (SwarmRecord, decomposeGoal, buildSynthesisTask, runSwarm, getSwarmStatus)
-- [ ] Write src/swarm.test.ts (3+ unit tests)
-- [ ] Add swarm_task + get_swarm_status tools to src/index.ts (ListTools + CallTool)
+- [x] git checkout -b feat/inject-cc-agent-mcp
+- [ ] Create src/mcp-inject.ts (injectMcpConfig helper)
+- [ ] Create src/mcp-inject.test.ts (unit tests)
+- [ ] Modify src/agent.ts: call injectMcpConfig before driver.spawn()
+- [ ] Modify src/meta-agent.ts: call injectMcpConfig before spawn()
 - [ ] npm install && npm run build
 - [ ] npm test (all pass)
 - [ ] git add specific files && git diff --staged (review carefully)
-- [ ] git commit -m "feat: swarm_task — auto-decompose + parallel fan-out + synthesis"
-- [ ] git push -u origin feat/swarm-task
+- [ ] git commit + git push -u origin feat/inject-cc-agent-mcp
 - [ ] gh pr create + gh pr merge --squash --auto
 - [ ] npm version patch && git push --follow-tags && npm publish --access public

@@ -16,6 +16,7 @@ import { logger } from "./logger.js";
 import { isDockerAvailable, runDockerAgent, getDockerEnv } from "./docker.js";
 import { getCurrentToken, rotateToken, getTokenStatus, resetTokens } from "./tokens.js";
 import { getRedis } from "./redis.js";
+import { injectMcpConfig, repoKeyFromUrl } from "./mcp-inject.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -898,6 +899,9 @@ export class JobManager {
       }
 
       let contextOverflowRetryRequested = false;
+
+      // Inject cc-agent MCP so spawned agents can call spawn_agent etc.
+      injectMcpConfig(workDir!, repoKeyFromUrl(job.repoUrl));
 
       await new Promise<void>((resolve, reject) => {
         const agentProc = driver.spawn({
