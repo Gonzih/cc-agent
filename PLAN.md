@@ -1,36 +1,28 @@
-# Plan: Inject current date into agent preamble
+# Plan: swarm_task + get_swarm_status
 
 ## Task Restatement
-`DEFAULT_PREAMBLE` is a static `const` string in `src/preamble.ts`. Agents that receive it
-don't know the current date and hallucinate wrong years. Fix: convert it to a `getPreamble()`
-function that injects the current ISO date/time on each call. Update every consumer.
+Add a swarm execution system to cc-agent: `swarm_task` auto-decomposes a high-level goal into N parallel sub-tasks using the Anthropic Messages API (native fetch, no new npm deps), fans out agents, waits for all to complete in the background, then spawns a synthesis agent that produces one unified deliverable. `get_swarm_status` polls the swarm state.
 
 ## Approaches
 
-### A. Keep DEFAULT_PREAMBLE as a string, prepend date in injectPreamble only
-Pros: minimal change — tests don't need touching.
-Cons: `getPreambleText` (used for logging) would still return the static string without date.
-Also the task explicitly says to change DEFAULT_PREAMBLE itself.
+### A. In-process background loop with setInterval
+Pros: simple, no extra processes. Cons: dies on restart.
 
-### B. Make DEFAULT_PREAMBLE a JS getter via Object.defineProperty (chosen pattern for ESM re-exports)
-Pros: zero consumer changes.
-Cons: complex, ESM named exports can't be getters the same way; test comparisons still racy.
+### B. Delegate to onComplete chain (existing cc-agent feature)
+Pros: reuses existing infra. Cons: onComplete is a single job, not fan-in; doesn't support waiting for N parallel jobs.
 
-### C. Create getPreamble() function, remove DEFAULT_PREAMBLE const, update all usages (chosen)
-Pros: explicit, clean, follows the task spec exactly.
-Cons: tests that do exact `toBe(DEFAULT_PREAMBLE)` need to use fake timers so the dynamic
-ISO timestamp is frozen and deterministic.
+### C. Background async (fire-and-forget from MCP handler) with polling loop (chosen)
+Pros: matches spec exactly, keeps MCP response < 5s, uses existing patterns. Cons: state lost on restart (acceptable per spec — we just mark failed on restart).
 
 ## Decision: Approach C
 
 ## Files to Touch
-- `src/preamble.ts` — create `getPreamble()`, remove `DEFAULT_PREAMBLE` const,
-  update `injectPreamble` and `getPreambleText` to call `getPreamble()`
-- `src/agent.test.ts` — replace `DEFAULT_PREAMBLE` import+usages with `getPreamble()`,
-  add `vi.useFakeTimers()` in the three describe blocks that do exact string comparison
+- `src/swarm.ts` (new) — all swarm logic
+- `src/swarm.test.ts` (new) — unit tests
+- `src/index.ts` — add `swarm_task` + `get_swarm_status` tools
 
 ## Risks
-- Millisecond races in tests: two consecutive `getPreamble()` calls could produce different ISO
-  strings if the millisecond ticks between calls. Mitigated by `vi.useFakeTimers()`.
-- `toLocaleDateString` output is locale-dependent; Node uses ICU data. As long as the runtime
-  has 'en-US' ICU support (it does in standard Node builds) this is fine.
+- Anthropic API call may fail (no API key) — handled by failing the swarm immediately with a clear error
+- Very large sub-job outputs in synthesis prompt — cap each sub-job output at 500 lines + 20k chars
+- Background async dies on process restart — swarm stays "running_subs" indefinitely; acceptable, won't block anything
+- Redis unavailable — swarm records stored in-memory map as fallback
