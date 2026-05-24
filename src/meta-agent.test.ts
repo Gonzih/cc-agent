@@ -590,7 +590,7 @@ describe("MetaAgentManager", () => {
       await expect((manager as any).pollInputQueues()).resolves.not.toThrow();
     });
 
-    it("writes coordinator input to chat log with role=user source=coordinator before spawning", async () => {
+    it("writes coordinator input to chat log with role=user source=cc-tg before spawning", async () => {
       mockRedisSmembers.mockResolvedValue(["my-repo"]);
       mockExistsSync.mockReturnValue(true);
       const priorState = {
@@ -608,7 +608,8 @@ describe("MetaAgentManager", () => {
       await (manager as any).pollInputQueues();
       await new Promise((r) => setImmediate(r));
 
-      // Find the lpush call for the coordinator entry (before assistant entries)
+      // Protocol: ChatMessage shape = { id, source, role, content, timestamp, chatId }
+      // Source for coordinator-injected messages is 'cc-tg'
       const coordinatorCall = mockRedisLPush.mock.calls.find((c) => {
         if ((c[0] as string) !== "cca:chat:log:my-repo") return false;
         try {
@@ -617,7 +618,7 @@ describe("MetaAgentManager", () => {
             source: string;
             content: string;
           };
-          return parsed.role === "user" && parsed.source === "coordinator";
+          return parsed.role === "user" && parsed.source === "cc-tg";
         } catch {
           return false;
         }
@@ -629,14 +630,14 @@ describe("MetaAgentManager", () => {
           role: string;
           source: string;
           content: string;
-          namespace: string;
+          chatId: number;
           timestamp: string;
           id: string;
         };
         expect(entry.role).toBe("user");
-        expect(entry.source).toBe("coordinator");
+        expect(entry.source).toBe("cc-tg");
         expect(entry.content).toBe("please do the thing");
-        expect(entry.namespace).toBe("my-repo");
+        expect(entry.chatId).toBe(0);
         expect(entry.timestamp).toMatch(/^\d{4}-/);
         expect(entry.id).toBeDefined();
       }
@@ -682,16 +683,17 @@ describe("MetaAgentManager", () => {
       const lPushCall = mockRedisLPush.mock.calls[0];
       expect(lPushCall).toBeDefined();
       if (lPushCall) {
+        // Protocol: ChatMessage shape = { id, source, role, content, timestamp, chatId }
         const persisted = JSON.parse(lPushCall[1] as string) as {
           role: string;
           source: string;
           content: string;
-          namespace: string;
+          chatId: number;
         };
         expect(persisted.role).toBe("assistant");
         expect(persisted.source).toBe("claude");
         expect(persisted.content).toBe("output line");
-        expect(persisted.namespace).toBe("my-repo");
+        expect(persisted.chatId).toBe(0);
       }
     });
   });

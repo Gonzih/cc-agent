@@ -22,6 +22,7 @@ const execFileAsync = promisify(execFile);
 const JOB_TTL_MS = 60 * 60 * 1000; // 1 hour — clean up old done jobs from memory
 
 const DEFAULT_TIMEOUT_MINUTES = 120;
+const DEPENDENCY_TICK_MS = 3000; // dependency scheduler poll interval
 const MAX_PENDING_JOBS = parseInt(process.env.OURO_MAX_PENDING_JOBS ?? "50", 10);
 
 /**
@@ -369,7 +370,7 @@ export class JobManager {
     // Periodic check for restored running jobs whose PID may have died
     setInterval(() => this.checkRestoredRunning(), 30 * 1000).unref();
     // Dependency scheduler — promote pending jobs when deps are done
-    setInterval(() => this.tick(), 3000).unref();
+    setInterval(() => this.tick(), DEPENDENCY_TICK_MS).unref();
     // Kill all active claude subprocesses and clean up Docker containers on process exit
     const killAll = () => {
       for (const [, kill] of this.kills) {
@@ -508,7 +509,7 @@ export class JobManager {
           repoUrl: job.repoUrl,
           lastLines,
           score: job.score ?? undefined,
-          timestamp: Date.now(),
+          timestamp: new Date().toISOString(), // Protocol: ISO 8601 string
           coordinatorPlan: planRaw ? (JSON.parse(planRaw) as CoordinatorPlan) : undefined,
         };
         // Write to Redis Stream for durability (fire-and-forget, never crash on failure)
@@ -522,7 +523,7 @@ export class JobManager {
             'lastLines', JSON.stringify(event.lastLines),
             'coordinatorPlan', JSON.stringify(event.coordinatorPlan ?? null),
             'score', event.score !== undefined ? String(event.score) : '',
-            'timestamp', String(event.timestamp),
+            'timestamp', event.timestamp, // ISO 8601 string — XADD requires string values
           );
           await redis.xtrim('cca:event-stream', 'MAXLEN', '~', '500');
         } catch (streamErr) {

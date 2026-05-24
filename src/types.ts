@@ -17,7 +17,7 @@ export interface JobEvent {
   repoUrl: string;
   lastLines: string[];   // last 5 lines from job output
   score?: number;
-  timestamp: number;
+  timestamp: string;     // ISO 8601 date string
   coordinatorPlan?: CoordinatorPlan;
 }
 
