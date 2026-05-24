@@ -505,7 +505,13 @@ export class JobManager {
         const event: JobEvent = {
           jobId: job.id,
           status: job.status,
-          title: job.task.split('\n')[0].slice(0, 120),
+          title: job.task.split('\n')[0]
+            .replace(/^#+\s*/, '')          // strip markdown headings (## Fix: → Fix:)
+            .replace(/^\*\*(.+)\*\*$/, '$1') // strip surrounding bold (**word** → word)
+            .replace(/^__(.+)__$/, '$1')     // strip surrounding bold (__word__ → word)
+            .replace(/^`(.+)`$/, '$1')       // strip surrounding backticks (`word` → word)
+            .trim()
+            .slice(0, 160),
           repoUrl: job.repoUrl,
           lastLines,
           score: job.score ?? undefined,

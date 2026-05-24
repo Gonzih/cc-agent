@@ -152,8 +152,20 @@ export class Coordinator {
 
     if (status === "done" || status === "failed") {
       const icon = status === "done" ? "✅" : "❌";
-      const scoreStr = typeof score === "number" ? ` (score: ${score.toFixed(2)})` : "";
-      await notify(this.namespace, `${icon} ${title}${scoreStr} (job_id: ${jobId})\n${repoUrl}`);
+      // Parse org/repo from repoUrl (e.g. https://github.com/gonzih/cc-tg → gonzih/cc-tg)
+      let repoShort = repoUrl;
+      try {
+        const url = new URL(repoUrl);
+        const parts = url.pathname.replace(/^\//, "").replace(/\/$/, "").split("/");
+        if (parts.length >= 2) repoShort = parts.slice(-2).join("/");
+      } catch {
+        // repoUrl is not a valid URL — use as-is
+      }
+      const shortId = jobId.slice(0, 8);
+      const scorePart = typeof score === "number" ? ` · ${score.toFixed(2)}` : "";
+      const line1 = `${icon} ${repoShort}${scorePart} · ${shortId}`;
+      const line2 = title.slice(0, 160);
+      await notify(this.namespace, `${line1}\n${line2}`);
     }
   }
 

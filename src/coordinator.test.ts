@@ -163,7 +163,7 @@ describe("Coordinator", () => {
 
     expect(mockRedisPublish).toHaveBeenCalledWith(
       "cca:notify:test-ns",
-      JSON.stringify({ text: "❌ My Job (job_id: job-1)\nhttps://github.com/test/repo" }),
+      JSON.stringify({ text: "❌ test/repo · job-1\nMy Job" }),
     );
   });
 
@@ -253,14 +253,14 @@ describe("Coordinator", () => {
     expect(mockRedisXack).toHaveBeenCalledWith("cca:event-stream", "coordinator", "1-1");
   });
 
-  // Done event notifies with ✅ format (no score when undefined) — JSON payload
+  // Done event notifies with new two-line format (no score when undefined) — JSON payload
   it("notifies JSON ✅ done for a standard done event", async () => {
     const event = makeEvent({ status: "done", title: "My Task", repoUrl: "https://github.com/test/repo" });
     await coordinator.processEvent(event);
 
     expect(mockRedisPublish).toHaveBeenCalledWith(
       "cca:notify:test-ns",
-      JSON.stringify({ text: "✅ My Task (job_id: job-1)\nhttps://github.com/test/repo" }),
+      JSON.stringify({ text: "✅ test/repo · job-1\nMy Task" }),
     );
   });
 
@@ -277,7 +277,7 @@ describe("Coordinator", () => {
     expect(manager.spawn).toHaveBeenCalled();
     expect(mockRedisPublish).toHaveBeenCalledWith(
       "cca:notify:test-ns",
-      JSON.stringify({ text: "✅ Parent Task (job_id: job-1)\nhttps://github.com/test/repo" }),
+      JSON.stringify({ text: "✅ test/repo · job-1\nParent Task" }),
     );
   });
 
@@ -288,7 +288,7 @@ describe("Coordinator", () => {
 
     expect(mockRedisPublish).toHaveBeenCalledWith(
       "cca:notify:test-ns",
-      JSON.stringify({ text: "✅ Low scorer (score: 0.30) (job_id: job-1)\nhttps://github.com/test/repo" }),
+      JSON.stringify({ text: "✅ test/repo · 0.30 · job-1\nLow scorer" }),
     );
   });
 
@@ -299,7 +299,7 @@ describe("Coordinator", () => {
 
     expect(mockRedisPublish).toHaveBeenCalledWith(
       "cca:notify:test-ns",
-      JSON.stringify({ text: "✅ Great Job (score: 0.80) (job_id: job-1)\nhttps://github.com/test/repo" }),
+      JSON.stringify({ text: "✅ test/repo · 0.80 · job-1\nGreat Job" }),
     );
   });
 });
