@@ -1,6 +1,6 @@
 {
   "name": "@gonzih/cc-agent",
-  "version": "0.15.19",
+  "version": "0.15.20",
   "description": "MCP server for spawning Claude Code agents in cloned repos — branch your agents",
   "type": "module",
   "bin": {
