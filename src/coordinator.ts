@@ -3,7 +3,8 @@
  *   - Spawns onComplete / coordinator_plan follow-up jobs on done events
  *   - Publishes failure / low-score notifications to cca:notify:<namespace>
  *
- * Restart-safe: tracks last-seen stream ID in cca:coordinator:last-id:<namespace>
+ * Uses XREADGROUP with consumer group "coordinator" for reliable delivery.
+ * MKSTREAM ensures the stream exists before any producers write to it.
  */
 
 import type { JobManager } from "./agent.js";
@@ -12,16 +13,19 @@ import { getRedis } from "./redis.js";
 import { logger } from "./logger.js";
 
 const STREAM_KEY = "cca:event-stream";
-const POLL_INTERVAL_MS = 2000;
+const COORDINATOR_GROUP = "coordinator";
+const COORDINATOR_POLL_MS = 2000;
 const LOW_SCORE_THRESHOLD = 0.5;
 
 /** Publish to both pub/sub channel (live) and a capped LIST (queryable). */
-export async function notify(namespace: string, message: string): Promise<void> {
+export async function notify(namespace: string, text: string): Promise<void> {
   const redis = getRedis();
   if (!redis) return;
+  // Protocol: NotificationPayload must be JSON { text, driver?, model?, cost? }
+  const payload = JSON.stringify({ text });
   try {
-    await redis.publish(`cca:notify:${namespace}`, message);
-    await redis.lpush(`cca:notify-log:${namespace}`, message);
+    await redis.publish(`cca:notify:${namespace}`, payload);
+    await redis.lpush(`cca:notify-log:${namespace}`, payload);
     await redis.ltrim(`cca:notify-log:${namespace}`, 0, 99);
   } catch (err) {
     logger.warn("coordinator:notify-failed", { namespace, err: String(err) });
@@ -38,6 +42,19 @@ export class Coordinator {
     if (this.running) return;
     this.running = true;
     logger.info("coordinator:start", { namespace: this.namespace });
+
+    // Create consumer group with MKSTREAM (idempotent — BUSYGROUP means already exists)
+    const redis = getRedis();
+    if (redis) {
+      try {
+        await redis.xgroup("CREATE", STREAM_KEY, COORDINATOR_GROUP, "0", "MKSTREAM");
+      } catch (err) {
+        if (!String(err).includes("BUSYGROUP")) {
+          logger.warn("coordinator:xgroup-create-failed", { err: String(err) });
+        }
+      }
+    }
+
     await this.replayMissedEvents();
     this.schedulePoll();
   }
@@ -57,7 +74,7 @@ export class Coordinator {
       this.poll()
         .catch((err) => logger.warn("coordinator:poll-error", { err: String(err) }))
         .finally(() => this.schedulePoll());
-    }, POLL_INTERVAL_MS);
+    }, COORDINATOR_POLL_MS);
     if (this.pollTimer && typeof (this.pollTimer as NodeJS.Timeout).unref === "function") {
       (this.pollTimer as NodeJS.Timeout).unref();
     }
@@ -67,18 +84,18 @@ export class Coordinator {
     const redis = getRedis();
     if (!redis) return;
 
-    const lastIdKey = `cca:coordinator:last-id:${this.namespace}`;
-    const lastId = (await redis.get(lastIdKey)) ?? "0-0";
-
     let entries: [string, string[]][];
     try {
-      // XREAD COUNT 100 BLOCK 0 STREAMS cca:event-stream <lastId>
-      const raw = await redis.xread("COUNT", "100", "STREAMS", STREAM_KEY, lastId);
-      if (!raw || raw.length === 0) return;
-      // raw = [[streamKey, [[id, fields], ...]]]
-      entries = (raw[0][1] as [string, string[]][]);
+      // XREADGROUP reads new (undelivered) messages via '>'
+      const raw = await redis.xreadgroup(
+        "GROUP", COORDINATOR_GROUP, this.namespace,
+        "COUNT", "100",
+        "STREAMS", STREAM_KEY, ">"
+      );
+      if (!raw || (raw as unknown[]).length === 0) return;
+      entries = ((raw as unknown as [string, [string, string[]][]][]) [0][1]);
     } catch (err) {
-      logger.warn("coordinator:xread-failed", { err: String(err) });
+      logger.warn("coordinator:xreadgroup-failed", { err: String(err) });
       return;
     }
 
@@ -86,22 +103,41 @@ export class Coordinator {
       try {
         const event = parseStreamEntry(fields);
         await this.processEvent(event);
+        // ACK the message after successful processing
+        await redis.xack(STREAM_KEY, COORDINATOR_GROUP, entryId);
       } catch (err) {
         logger.warn("coordinator:process-event-error", { entryId, err: String(err) });
-      }
-      // Always advance cursor even if processing failed
-      try {
-        await redis.set(lastIdKey, entryId);
-      } catch (err) {
-        logger.warn("coordinator:cursor-update-failed", { err: String(err) });
+        // Do not ACK on error — message stays in PEL for re-delivery on next restart
       }
     }
   }
 
   private async replayMissedEvents(): Promise<void> {
-    // Just run the normal poll from last saved ID (or 0-0 on first start).
-    // This naturally replays any events written while the process was down.
-    await this.poll();
+    // Read pending (delivered but unACKed) messages from before any crash
+    const redis = getRedis();
+    if (!redis) return;
+    try {
+      const raw = await redis.xreadgroup(
+        "GROUP", COORDINATOR_GROUP, this.namespace,
+        "COUNT", "100",
+        "STREAMS", STREAM_KEY, "0"
+      );
+      if (!raw || (raw as unknown[]).length === 0) return;
+      const entries = ((raw as unknown as [string, [string, string[]][]][]) [0][1]);
+      for (const [entryId, fields] of entries) {
+        // Empty fields array means the entry was deleted from the stream
+        if (!fields || fields.length === 0) continue;
+        try {
+          const event = parseStreamEntry(fields);
+          await this.processEvent(event);
+          await redis.xack(STREAM_KEY, COORDINATOR_GROUP, entryId);
+        } catch (err) {
+          logger.warn("coordinator:replay-event-error", { entryId, err: String(err) });
+        }
+      }
+    } catch (err) {
+      logger.warn("coordinator:replay-failed", { err: String(err) });
+    }
   }
 
   async processEvent(event: JobEvent): Promise<void> {
@@ -164,7 +200,8 @@ function parseStreamEntry(fields: string[]): JobEvent {
     repoUrl: obj.repoUrl ?? "",
     lastLines: obj.lastLines ? (JSON.parse(obj.lastLines) as string[]) : [],
     score: obj.score ? parseFloat(obj.score) : undefined,
-    timestamp: obj.timestamp ? parseInt(obj.timestamp, 10) : Date.now(),
+    // Protocol: timestamp is ISO 8601 string
+    timestamp: obj.timestamp ?? new Date().toISOString(),
     coordinatorPlan: obj.coordinatorPlan
       ? (JSON.parse(obj.coordinatorPlan) as CoordinatorPlan | null) ?? undefined
       : undefined,

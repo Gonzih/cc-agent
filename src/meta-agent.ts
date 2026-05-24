@@ -98,18 +98,23 @@ export class MetaAgentManager {
         } catch {
           content = raw;
         }
-        // Log the incoming coordinator message to the chat log so the UI can
-        // render it as a user bubble alongside Claude's assistant responses.
+        // Log the incoming message to the chat log so the UI can render it as a
+        // user bubble alongside Claude's assistant responses.
+        // Protocol: ChatMessage shape = { id, source, role, content, timestamp, chatId }
+        // Source must be one of: 'telegram' | 'ui' | 'claude' | 'cc-tg'
         const coordinatorEntry = JSON.stringify({
           id: randomUUID(),
+          source: "cc-tg",
           role: "user",
-          source: "coordinator",
-          namespace: ns,
           content,
           timestamp: new Date().toISOString(),
+          chatId: 0,
         });
+        // NOTE: cca:chat:log:{ns} is LIFO (newest first via LPUSH) — consumers must reverse for chronological display
         redis.lpush(this.logKey(ns), coordinatorEntry).catch(() => {});
         redis.ltrim(this.logKey(ns), 0, CHAT_LOG_MAX).catch(() => {});
+        // Protocol: every LPUSH to chat:log must also PUBLISH to chat:outgoing
+        redis.publish(this.outChannel(ns), coordinatorEntry).catch(() => {});
         this.messageMetaAgent(ns, content).catch((err) => {
           logger.warn("meta-agent:poller-message-failed", { namespace: ns, err: String(err) });
         });
@@ -386,16 +391,19 @@ export class MetaAgentManager {
   private async publishOutput(namespace: string, line: string): Promise<void> {
     const redis = getRedis();
     if (!redis) return;
+    // Protocol: ChatMessage shape = { id, source, role, content, timestamp, chatId }
+    // Source must be one of: 'telegram' | 'ui' | 'claude' | 'cc-tg'
     const message = JSON.stringify({
       id: randomUUID(),
       source: "claude",
       role: "assistant",
-      namespace,
       content: line,
       timestamp: new Date().toISOString(),
+      chatId: 0,
     });
     try {
       await redis.publish(this.outChannel(namespace), message);
+      // NOTE: cca:chat:log:{ns} is LIFO (newest first via LPUSH) — consumers must reverse for chronological display
       await redis.lpush(this.logKey(namespace), message);
       await redis.ltrim(this.logKey(namespace), 0, CHAT_LOG_MAX);
     } catch (err) {
