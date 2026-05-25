@@ -1,39 +1,95 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// Mock logger (profiles.ts doesn't use logger, but store.js transitively might)
-vi.mock("./logger.js", () => ({
-  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+// vi.mock is hoisted to the top of the file, so variables used inside the
+// factory must be created with vi.hoisted() to be available at hoist time.
+const mockProfileStore = vi.hoisted(() => ({
+  listProfiles: vi.fn(),
+  saveProfile: vi.fn(),
+  getProfile: vi.fn(),
+  deleteProfile: vi.fn(),
 }));
-
-// Mock the profileStore from store.js so profile tests are fully isolated
-const mockListProfiles = vi.fn();
-const mockSaveProfile = vi.fn();
-const mockGetProfile = vi.fn();
-const mockDeleteProfile = vi.fn();
 
 vi.mock("./store.js", () => ({
-  profileStore: {
-    listProfiles: mockListProfiles,
-    saveProfile: mockSaveProfile,
-    getProfile: mockGetProfile,
-    deleteProfile: mockDeleteProfile,
-  },
+  profileStore: mockProfileStore,
 }));
+
+import { interpolate, loadProfiles, upsertProfile, getProfile, deleteProfile } from "./profiles.js";
+import type { Profile } from "./profiles.js";
+
+// ─── interpolate ─────────────────────────────────────────────────────────────
+
+describe("interpolate", () => {
+  it("replaces a single placeholder", () => {
+    expect(interpolate("Hello {{name}}!", { name: "world" })).toBe("Hello world!");
+  });
+
+  it("replaces multiple different placeholders", () => {
+    expect(
+      interpolate("{{greeting}}, {{name}}. Repo: {{repo}}", {
+        greeting: "Hi",
+        name: "Alice",
+        repo: "my/repo",
+      })
+    ).toBe("Hi, Alice. Repo: my/repo");
+  });
+
+  it("replaces repeated placeholders", () => {
+    expect(interpolate("{{x}} and {{x}}", { x: "foo" })).toBe("foo and foo");
+  });
+
+  it("leaves unknown placeholders intact with their original syntax", () => {
+    expect(interpolate("Hello {{unknown}}", {})).toBe("Hello {{unknown}}");
+  });
+
+  it("returns template unchanged when there are no placeholders", () => {
+    expect(interpolate("No placeholders here.", { x: "y" })).toBe("No placeholders here.");
+  });
+
+  it("handles empty template", () => {
+    expect(interpolate("", { key: "val" })).toBe("");
+  });
+
+  it("handles template with only a placeholder", () => {
+    expect(interpolate("{{val}}", { val: "42" })).toBe("42");
+  });
+
+  it("does not replace partial syntax — single braces are left alone", () => {
+    expect(interpolate("{name}", { name: "x" })).toBe("{name}");
+  });
+
+  it("handles vars with special regex characters in values", () => {
+    expect(interpolate("{{url}}", { url: "https://example.com/path?q=1&r=2" })).toBe(
+      "https://example.com/path?q=1&r=2"
+    );
+  });
+
+  it("handles multi-line templates", () => {
+    const template = "Line 1: {{a}}\nLine 2: {{b}}";
+    expect(interpolate(template, { a: "hello", b: "world" })).toBe(
+      "Line 1: hello\nLine 2: world"
+    );
+  });
+});
+
+// ─── profileStore delegate wrappers ──────────────────────────────────────────
+
+const sampleProfile: Profile = {
+  name: "my-profile",
+  task: "Do {{thing}} in {{repo}}",
+};
 
 describe("loadProfiles", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("delegates to profileStore.listProfiles and returns the result", async () => {
-    mockListProfiles.mockResolvedValue([{ name: "a", task: "do a" }]);
-    const { loadProfiles } = await import("./profiles.js");
+  it("delegates to profileStore.listProfiles", async () => {
+    mockProfileStore.listProfiles.mockResolvedValue([sampleProfile]);
     const result = await loadProfiles();
-    expect(mockListProfiles).toHaveBeenCalledOnce();
-    expect(result).toEqual([{ name: "a", task: "do a" }]);
+    expect(mockProfileStore.listProfiles).toHaveBeenCalledOnce();
+    expect(result).toEqual([sampleProfile]);
   });
 
-  it("returns an empty array when no profiles exist", async () => {
-    mockListProfiles.mockResolvedValue([]);
-    const { loadProfiles } = await import("./profiles.js");
+  it("returns empty array when store has no profiles", async () => {
+    mockProfileStore.listProfiles.mockResolvedValue([]);
     expect(await loadProfiles()).toEqual([]);
   });
 });
@@ -41,90 +97,41 @@ describe("loadProfiles", () => {
 describe("upsertProfile", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("delegates to profileStore.saveProfile with the given profile", async () => {
-    mockSaveProfile.mockResolvedValue(undefined);
-    const { upsertProfile } = await import("./profiles.js");
-    await upsertProfile({ name: "my-profile", task: "run tests" });
-    expect(mockSaveProfile).toHaveBeenCalledWith({ name: "my-profile", task: "run tests" });
+  it("delegates to profileStore.saveProfile with the profile", async () => {
+    mockProfileStore.saveProfile.mockResolvedValue(undefined);
+    await upsertProfile(sampleProfile);
+    expect(mockProfileStore.saveProfile).toHaveBeenCalledWith(sampleProfile);
   });
 });
 
 describe("getProfile", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("returns the profile when found", async () => {
-    mockGetProfile.mockResolvedValue({ name: "foo", task: "bar" });
-    const { getProfile } = await import("./profiles.js");
-    const result = await getProfile("foo");
-    expect(mockGetProfile).toHaveBeenCalledWith("foo");
-    expect(result).toEqual({ name: "foo", task: "bar" });
+  it("delegates to profileStore.getProfile with the name", async () => {
+    mockProfileStore.getProfile.mockResolvedValue(sampleProfile);
+    const result = await getProfile("my-profile");
+    expect(mockProfileStore.getProfile).toHaveBeenCalledWith("my-profile");
+    expect(result).toEqual(sampleProfile);
   });
 
   it("returns null when profile does not exist", async () => {
-    mockGetProfile.mockResolvedValue(null);
-    const { getProfile } = await import("./profiles.js");
-    expect(await getProfile("ghost")).toBeNull();
+    mockProfileStore.getProfile.mockResolvedValue(null);
+    expect(await getProfile("nonexistent")).toBeNull();
   });
 });
 
 describe("deleteProfile", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("returns true when profile was deleted", async () => {
-    mockDeleteProfile.mockResolvedValue(true);
-    const { deleteProfile } = await import("./profiles.js");
-    const result = await deleteProfile("old");
-    expect(mockDeleteProfile).toHaveBeenCalledWith("old");
+  it("delegates to profileStore.deleteProfile and returns true on success", async () => {
+    mockProfileStore.deleteProfile.mockResolvedValue(true);
+    const result = await deleteProfile("my-profile");
+    expect(mockProfileStore.deleteProfile).toHaveBeenCalledWith("my-profile");
     expect(result).toBe(true);
   });
 
-  it("returns false when profile was not found", async () => {
-    mockDeleteProfile.mockResolvedValue(false);
-    const { deleteProfile } = await import("./profiles.js");
+  it("returns false when the profile did not exist", async () => {
+    mockProfileStore.deleteProfile.mockResolvedValue(false);
     expect(await deleteProfile("missing")).toBe(false);
-  });
-});
-
-describe("interpolate", () => {
-  it("replaces a single {{key}} placeholder", async () => {
-    const { interpolate } = await import("./profiles.js");
-    expect(interpolate("Hello {{name}}!", { name: "world" })).toBe("Hello world!");
-  });
-
-  it("replaces multiple distinct placeholders", async () => {
-    const { interpolate } = await import("./profiles.js");
-    expect(interpolate("{{greeting}}, {{name}}.", { greeting: "Hi", name: "Alice" })).toBe("Hi, Alice.");
-  });
-
-  it("replaces a placeholder that appears multiple times", async () => {
-    const { interpolate } = await import("./profiles.js");
-    expect(interpolate("{{x}} + {{x}} = two", { x: "one" })).toBe("one + one = two");
-  });
-
-  it("leaves unknown placeholders unchanged", async () => {
-    const { interpolate } = await import("./profiles.js");
-    expect(interpolate("{{known}} {{unknown}}", { known: "OK" })).toBe("OK {{unknown}}");
-  });
-
-  it("returns template unchanged when no placeholders are present", async () => {
-    const { interpolate } = await import("./profiles.js");
-    expect(interpolate("no placeholders here", { x: "y" })).toBe("no placeholders here");
-  });
-
-  it("returns empty string unchanged", async () => {
-    const { interpolate } = await import("./profiles.js");
-    expect(interpolate("", { x: "y" })).toBe("");
-  });
-
-  it("works with empty vars map", async () => {
-    const { interpolate } = await import("./profiles.js");
-    // All placeholders stay unresolved
-    expect(interpolate("{{a}} {{b}}", {})).toBe("{{a}} {{b}}");
-  });
-
-  it("handles placeholder with numeric-like key name", async () => {
-    const { interpolate } = await import("./profiles.js");
-    // \w+ matches word chars including digits — but key must start with \w
-    expect(interpolate("{{repo123}}", { repo123: "my-repo" })).toBe("my-repo");
   });
 });

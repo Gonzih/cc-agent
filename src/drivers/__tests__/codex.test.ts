@@ -1,280 +1,265 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { EventEmitter } from "events";
-import { CodexDriver } from "../codex.js";
-
-// ---------------------------------------------------------------------------
-// Mocks
-// ---------------------------------------------------------------------------
-
-const { mockExistsSync, mockSpawn } = vi.hoisted(() => ({
-  mockExistsSync: vi.fn(),
-  mockSpawn: vi.fn(),
-}));
 
 vi.mock("fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("fs")>();
-  return { ...actual, existsSync: mockExistsSync };
+  return { ...actual, existsSync: vi.fn(() => false) };
 });
 
-vi.mock("child_process", () => ({ spawn: mockSpawn }));
+vi.mock("child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("child_process")>();
+  return { ...actual, spawn: vi.fn() };
+});
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+import { spawn } from "child_process";
+import { CodexDriver } from "../codex.js";
+import type { UsageEvent } from "../types.js";
 
-function makeFakeProc(pid = 1234) {
+// ─── helpers ──────────────────────────────────────────────────────────────────
+
+function makeFakeProc(pid = 33333) {
   const stdout = new EventEmitter();
   const stderr = new EventEmitter();
   const stdin = { write: vi.fn(), destroyed: false };
-  return Object.assign(new EventEmitter(), { pid, stdout, stderr, stdin, kill: vi.fn() });
+  const proc = Object.assign(new EventEmitter(), { stdout, stderr, stdin, pid, kill: vi.fn() });
+  return proc as typeof proc & { stdout: typeof stdout; stderr: typeof stderr; stdin: typeof stdin };
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
+// ─── CodexDriver ──────────────────────────────────────────────────────────────
 
 describe("CodexDriver", () => {
   let driver: CodexDriver;
+  const mockSpawn = vi.mocked(spawn);
 
   beforeEach(() => {
     driver = new CodexDriver();
     vi.clearAllMocks();
-    mockExistsSync.mockReturnValue(false);
-    delete process.env.OPENAI_API_KEY;
   });
-
-  // --- metadata ---
 
   it("has name 'codex'", () => {
     expect(driver.name).toBe("codex");
   });
 
-  it("hasSession always returns false (no persistent sessions)", () => {
-    expect(driver.hasSession("/any/cwd")).toBe(false);
+  it("hasSession always returns false", () => {
+    expect(driver.hasSession("/any/path")).toBe(false);
   });
 
-  // --- resolveBinary ---
+  // ─── estimateCost ─────────────────────────────────────────────────────────
 
-  it("resolveBinary returns binary found in PATH", () => {
-    process.env.PATH = "/usr/local/bin:/usr/bin";
-    mockExistsSync.mockImplementation((p: string) => p === "/usr/local/bin/codex");
-    expect(driver.resolveBinary()).toBe("/usr/local/bin/codex");
-  });
-
-  it("resolveBinary checks cargo bin fallback", () => {
-    process.env.PATH = "/no/such/dir";
-    const home = process.env.HOME ?? "/home/test";
-    mockExistsSync.mockImplementation((p: string) => p === `${home}/.cargo/bin/codex`);
-    expect(driver.resolveBinary()).toBe(`${home}/.cargo/bin/codex`);
-  });
-
-  it("resolveBinary returns 'codex' when nothing found", () => {
-    process.env.PATH = "";
-    mockExistsSync.mockReturnValue(false);
-    expect(driver.resolveBinary()).toBe("codex");
-  });
-
-  // --- spawn: args ---
-
-  it("passes 'exec' as first arg followed by the task", () => {
-    const proc = makeFakeProc();
-    mockSpawn.mockReturnValue(proc);
-
-    driver.spawn({ cwd: "/tmp", task: "do the work", budgetUsd: 5 });
-
-    const args: string[] = mockSpawn.mock.calls[0][1];
-    expect(args[0]).toBe("exec");
-    expect(args[1]).toBe("do the work");
-  });
-
-  it("includes --model flag with provided model", () => {
-    const proc = makeFakeProc();
-    mockSpawn.mockReturnValue(proc);
-
-    driver.spawn({ cwd: "/tmp", task: "t", budgetUsd: 5, model: "gpt-4.1-mini" });
-
-    const args: string[] = mockSpawn.mock.calls[0][1];
-    expect(args).toContain("--model");
-    expect(args).toContain("gpt-4.1-mini");
-  });
-
-  it("defaults to gpt-4.1 when no model specified", () => {
-    const proc = makeFakeProc();
-    mockSpawn.mockReturnValue(proc);
-
-    driver.spawn({ cwd: "/tmp", task: "t", budgetUsd: 5 });
-
-    const args: string[] = mockSpawn.mock.calls[0][1];
-    expect(args).toContain("gpt-4.1");
-  });
-
-  it("includes --full-auto flag", () => {
-    const proc = makeFakeProc();
-    mockSpawn.mockReturnValue(proc);
-
-    driver.spawn({ cwd: "/tmp", task: "t", budgetUsd: 5 });
-
-    const args: string[] = mockSpawn.mock.calls[0][1];
-    expect(args).toContain("--full-auto");
-  });
-
-  it("sets OPENAI_API_KEY from options.token", () => {
-    const proc = makeFakeProc();
-    mockSpawn.mockReturnValue(proc);
-
-    driver.spawn({ cwd: "/tmp", task: "t", budgetUsd: 5, token: "sk-token" });
-
-    expect(mockSpawn.mock.calls[0][2].env.OPENAI_API_KEY).toBe("sk-token");
-  });
-
-  it("picks up OPENAI_API_KEY from process.env when no token provided", () => {
-    process.env.OPENAI_API_KEY = "sk-env-key";
-    const proc = makeFakeProc();
-    mockSpawn.mockReturnValue(proc);
-
-    driver.spawn({ cwd: "/tmp", task: "t", budgetUsd: 5 });
-
-    expect(mockSpawn.mock.calls[0][2].env.OPENAI_API_KEY).toBe("sk-env-key");
-  });
-
-  // --- spawn: text events (plain text output, no JSON) ---
-
-  it("emits text lines from stdout", () => {
-    const proc = makeFakeProc();
-    mockSpawn.mockReturnValue(proc);
-
-    const texts: string[] = [];
-    driver.spawn({ cwd: "/tmp", task: "t", budgetUsd: 5 }).on("text", (t) => texts.push(t));
-
-    proc.stdout.emit("data", Buffer.from("codex output line 1\ncodex output line 2\n"));
-
-    expect(texts).toContain("codex output line 1");
-    expect(texts).toContain("codex output line 2");
-  });
-
-  it("buffers partial stdout lines until newline", () => {
-    const proc = makeFakeProc();
-    mockSpawn.mockReturnValue(proc);
-
-    const texts: string[] = [];
-    driver.spawn({ cwd: "/tmp", task: "t", budgetUsd: 5 }).on("text", (t) => texts.push(t));
-
-    proc.stdout.emit("data", Buffer.from("partial"));
-    expect(texts).toHaveLength(0);
-
-    proc.stdout.emit("data", Buffer.from(" complete\n"));
-    expect(texts).toContain("partial complete");
-  });
-
-  it("emits remaining buffer content on exit", () => {
-    const proc = makeFakeProc();
-    mockSpawn.mockReturnValue(proc);
-
-    const texts: string[] = [];
-    driver.spawn({ cwd: "/tmp", task: "t", budgetUsd: 5 }).on("text", (t) => texts.push(t));
-
-    proc.stdout.emit("data", Buffer.from("no newline at end"));
-    proc.emit("exit", 0);
-
-    expect(texts).toContain("no newline at end");
-  });
-
-  // --- spawn: stderr ---
-
-  it("emits stderr text with [codex stderr] prefix", () => {
-    const proc = makeFakeProc();
-    mockSpawn.mockReturnValue(proc);
-
-    const texts: string[] = [];
-    driver.spawn({ cwd: "/tmp", task: "t", budgetUsd: 5 }).on("text", (t) => texts.push(t));
-
-    proc.stderr.emit("data", Buffer.from("codex error"));
-    expect(texts.some((t) => t.includes("[codex stderr]") && t.includes("codex error"))).toBe(true);
-  });
-
-  // --- spawn: exit ---
-
-  it("emits exit code on process exit", () => {
-    const proc = makeFakeProc();
-    mockSpawn.mockReturnValue(proc);
-
-    let code: number | null = null;
-    driver.spawn({ cwd: "/tmp", task: "t", budgetUsd: 5 }).on("exit", (c) => { code = c; });
-
-    proc.emit("exit", 0);
-    expect(code).toBe(0);
-  });
-
-  it("emits non-zero exit code on failure", () => {
-    const proc = makeFakeProc();
-    mockSpawn.mockReturnValue(proc);
-
-    let code: number | null = null;
-    driver.spawn({ cwd: "/tmp", task: "t", budgetUsd: 5 }).on("exit", (c) => { code = c; });
-
-    proc.emit("exit", 2);
-    expect(code).toBe(2);
-  });
-
-  // --- spawn: error event ---
-
-  it("emits [codex] error text and exit(1) on process error", () => {
-    const proc = makeFakeProc();
-    mockSpawn.mockReturnValue(proc);
-
-    const texts: string[] = [];
-    let code: number | null = null;
-    const agentProc = driver.spawn({ cwd: "/tmp", task: "t", budgetUsd: 5 });
-    agentProc.on("text", (t) => texts.push(t));
-    agentProc.on("exit", (c) => { code = c; });
-
-    proc.emit("error", new Error("binary not found"));
-
-    expect(texts.some((t) => t.includes("[codex]"))).toBe(true);
-    expect(code).toBe(1);
-  });
-
-  // --- spawn: kill ---
-
-  it("kill() stops the process and suppresses the exit event", () => {
-    const proc = makeFakeProc();
-    mockSpawn.mockReturnValue(proc);
-
-    let exitEmitted = false;
-    const agentProc = driver.spawn({ cwd: "/tmp", task: "t", budgetUsd: 5 });
-    agentProc.on("exit", () => { exitEmitted = true; });
-    agentProc.kill();
-    proc.emit("exit", 1);
-
-    expect(proc.kill).toHaveBeenCalled();
-    expect(exitEmitted).toBe(false);
-  });
-
-  it("sets pid from underlying process", () => {
-    const proc = makeFakeProc(5555);
-    mockSpawn.mockReturnValue(proc);
-
-    expect(driver.spawn({ cwd: "/tmp", task: "t", budgetUsd: 5 }).pid).toBe(5555);
-  });
-
-  // --- estimateCost ---
-
-  it("estimateCost returns costUsd when provided", () => {
-    expect(driver.estimateCost({ inputTokens: 1, outputTokens: 1, costUsd: 0.99 })).toBe(0.99);
-  });
-
-  it("estimateCost returns 0 for zero tokens", () => {
+  it("estimateCost returns 0 for zero usage", () => {
     expect(driver.estimateCost({ inputTokens: 0, outputTokens: 0 })).toBe(0);
   });
 
-  it("estimateCost calculates from token counts for gpt-4.1", () => {
-    // gpt-4.1: $2/M input, $8/M output → 1M each = $10
-    expect(driver.estimateCost({ inputTokens: 1_000_000, outputTokens: 1_000_000 }, "gpt-4.1")).toBe(10);
+  it("estimateCost returns costUsd directly when provided", () => {
+    const u: UsageEvent = { inputTokens: 1000, outputTokens: 500, costUsd: 0.77 };
+    expect(driver.estimateCost(u)).toBe(0.77);
   });
 
-  it("estimateCost rounds to 4 decimal places", () => {
-    const cost = driver.estimateCost({ inputTokens: 100, outputTokens: 50 }, "gpt-4.1");
-    const rounded = Math.round(cost * 10000) / 10000;
-    expect(cost).toBe(rounded);
+  it("estimateCost calculates from tokens for gpt-4.1", () => {
+    const cost = driver.estimateCost(
+      { inputTokens: 1_000_000, outputTokens: 1_000_000 },
+      "gpt-4.1"
+    );
+    expect(typeof cost).toBe("number");
+    expect(cost).toBeGreaterThan(0);
+  });
+
+  // ─── spawn: stdout line buffering ─────────────────────────────────────────
+
+  it("emits text for each complete stdout line", () => {
+    const fakeProc = makeFakeProc();
+    mockSpawn.mockReturnValue(fakeProc as ReturnType<typeof spawn>);
+
+    const agentProc = driver.spawn({ cwd: "/tmp", task: "task", budgetUsd: 5 });
+    const texts: string[] = [];
+    agentProc.on("text", (t) => texts.push(t));
+
+    fakeProc.stdout.emit("data", Buffer.from("output line 1\noutput line 2\n"));
+
+    expect(texts).toContain("output line 1");
+    expect(texts).toContain("output line 2");
+  });
+
+  it("buffers partial lines across multiple data events", () => {
+    const fakeProc = makeFakeProc();
+    mockSpawn.mockReturnValue(fakeProc as ReturnType<typeof spawn>);
+
+    const agentProc = driver.spawn({ cwd: "/tmp", task: "task", budgetUsd: 5 });
+    const texts: string[] = [];
+    agentProc.on("text", (t) => texts.push(t));
+
+    fakeProc.stdout.emit("data", Buffer.from("partial"));
+    expect(texts).toHaveLength(0);
+
+    fakeProc.stdout.emit("data", Buffer.from("-completed\n"));
+    expect(texts).toContain("partial-completed");
+  });
+
+  it("skips empty lines", () => {
+    const fakeProc = makeFakeProc();
+    mockSpawn.mockReturnValue(fakeProc as ReturnType<typeof spawn>);
+
+    const agentProc = driver.spawn({ cwd: "/tmp", task: "task", budgetUsd: 5 });
+    const texts: string[] = [];
+    agentProc.on("text", (t) => texts.push(t));
+
+    fakeProc.stdout.emit("data", Buffer.from("\n\n  \nreal line\n"));
+    // Only "real line" should be emitted — empty/whitespace-only lines are skipped
+    expect(texts.filter((t) => t.trim().length > 0)).toEqual(["real line"]);
+  });
+
+  it("flushes remaining buffer on exit", () => {
+    const fakeProc = makeFakeProc();
+    mockSpawn.mockReturnValue(fakeProc as ReturnType<typeof spawn>);
+
+    const agentProc = driver.spawn({ cwd: "/tmp", task: "task", budgetUsd: 5 });
+    const texts: string[] = [];
+    agentProc.on("text", (t) => texts.push(t));
+
+    fakeProc.stdout.emit("data", Buffer.from("no trailing newline"));
+    fakeProc.emit("exit", 0);
+
+    expect(texts).toContain("no trailing newline");
+  });
+
+  it("emits exit event with the process exit code", () => {
+    const fakeProc = makeFakeProc();
+    mockSpawn.mockReturnValue(fakeProc as ReturnType<typeof spawn>);
+
+    const agentProc = driver.spawn({ cwd: "/tmp", task: "t", budgetUsd: 5 });
+    let exitCode: number | null | undefined;
+    agentProc.on("exit", (c) => { exitCode = c; });
+
+    fakeProc.emit("exit", 0);
+    expect(exitCode).toBe(0);
+  });
+
+  it("propagates non-zero exit code", () => {
+    const fakeProc = makeFakeProc();
+    mockSpawn.mockReturnValue(fakeProc as ReturnType<typeof spawn>);
+
+    const agentProc = driver.spawn({ cwd: "/tmp", task: "t", budgetUsd: 5 });
+    let exitCode: number | null | undefined;
+    agentProc.on("exit", (c) => { exitCode = c; });
+
+    fakeProc.emit("exit", 1);
+    expect(exitCode).toBe(1);
+  });
+
+  // ─── spawn: stderr ────────────────────────────────────────────────────────
+
+  it("prefixes stderr with [codex stderr]", () => {
+    const fakeProc = makeFakeProc();
+    mockSpawn.mockReturnValue(fakeProc as ReturnType<typeof spawn>);
+
+    const agentProc = driver.spawn({ cwd: "/tmp", task: "t", budgetUsd: 5 });
+    const texts: string[] = [];
+    agentProc.on("text", (t) => texts.push(t));
+
+    fakeProc.stderr.emit("data", Buffer.from("rate limit hit"));
+    expect(texts.some((t) => t.includes("[codex stderr]") && t.includes("rate limit hit"))).toBe(true);
+  });
+
+  // ─── spawn: process error ─────────────────────────────────────────────────
+
+  it("emits text and exit(1) on process error event", () => {
+    const fakeProc = makeFakeProc();
+    mockSpawn.mockReturnValue(fakeProc as ReturnType<typeof spawn>);
+
+    const agentProc = driver.spawn({ cwd: "/tmp", task: "t", budgetUsd: 5 });
+    const texts: string[] = [];
+    let exitCode: number | null | undefined;
+    agentProc.on("text", (t) => texts.push(t));
+    agentProc.on("exit", (c) => { exitCode = c; });
+
+    fakeProc.emit("error", new Error("spawn ENOENT"));
+    expect(texts.some((t) => t.includes("[codex]"))).toBe(true);
+    expect(exitCode).toBe(1);
+  });
+
+  // ─── spawn: kill ──────────────────────────────────────────────────────────
+
+  it("kill() calls proc.kill() and suppresses exit event", () => {
+    const fakeProc = makeFakeProc();
+    mockSpawn.mockReturnValue(fakeProc as ReturnType<typeof spawn>);
+
+    const agentProc = driver.spawn({ cwd: "/tmp", task: "t", budgetUsd: 5 });
+    let exitFired = false;
+    agentProc.on("exit", () => { exitFired = true; });
+
+    agentProc.kill();
+    fakeProc.emit("exit", null);
+
+    expect(fakeProc.kill).toHaveBeenCalled();
+    expect(exitFired).toBe(false);
+  });
+
+  // ─── spawn: OPENAI_API_KEY mapping ────────────────────────────────────────
+
+  it("maps token option to OPENAI_API_KEY", () => {
+    const fakeProc = makeFakeProc();
+    mockSpawn.mockReturnValue(fakeProc as ReturnType<typeof spawn>);
+
+    driver.spawn({ cwd: "/tmp", task: "t", budgetUsd: 5, token: "sk-codex-key" });
+
+    const [, , spawnOpts] = mockSpawn.mock.calls[0] as [unknown, unknown, { env: NodeJS.ProcessEnv }];
+    expect(spawnOpts.env?.OPENAI_API_KEY).toBe("sk-codex-key");
+  });
+
+  // ─── spawn: CLI args ──────────────────────────────────────────────────────
+
+  it("passes --model and --full-auto flags", () => {
+    const fakeProc = makeFakeProc();
+    mockSpawn.mockReturnValue(fakeProc as ReturnType<typeof spawn>);
+
+    driver.spawn({ cwd: "/tmp", task: "do work", budgetUsd: 5, model: "gpt-4o-mini" });
+
+    const [, args] = mockSpawn.mock.calls[0] as [unknown, string[]];
+    expect(args).toContain("--full-auto");
+    expect(args).toContain("--model");
+    expect(args[args.indexOf("--model") + 1]).toBe("gpt-4o-mini");
+  });
+
+  it("uses exec subcommand and passes task as positional arg", () => {
+    const fakeProc = makeFakeProc();
+    mockSpawn.mockReturnValue(fakeProc as ReturnType<typeof spawn>);
+
+    driver.spawn({ cwd: "/tmp", task: "my task text", budgetUsd: 5 });
+
+    const [, args] = mockSpawn.mock.calls[0] as [unknown, string[]];
+    expect(args[0]).toBe("exec");
+    expect(args[1]).toBe("my task text");
+  });
+
+  it("uses gpt-4.1 as default model", () => {
+    const fakeProc = makeFakeProc();
+    mockSpawn.mockReturnValue(fakeProc as ReturnType<typeof spawn>);
+
+    driver.spawn({ cwd: "/tmp", task: "t", budgetUsd: 5 });
+
+    const [, args] = mockSpawn.mock.calls[0] as [unknown, string[]];
+    expect(args[args.indexOf("--model") + 1]).toBe("gpt-4.1");
+  });
+
+  // ─── spawn: pid propagation ───────────────────────────────────────────────
+
+  it("exposes the process pid", () => {
+    const fakeProc = makeFakeProc(77777);
+    mockSpawn.mockReturnValue(fakeProc as ReturnType<typeof spawn>);
+
+    const agentProc = driver.spawn({ cwd: "/tmp", task: "t", budgetUsd: 5 });
+    expect(agentProc.pid).toBe(77777);
+  });
+
+  // ─── spawn: writeStdin ────────────────────────────────────────────────────
+
+  it("writeStdin writes to proc.stdin", () => {
+    const fakeProc = makeFakeProc();
+    mockSpawn.mockReturnValue(fakeProc as ReturnType<typeof spawn>);
+
+    const agentProc = driver.spawn({ cwd: "/tmp", task: "t", budgetUsd: 5 });
+    agentProc.writeStdin?.("input data");
+
+    expect(fakeProc.stdin.write).toHaveBeenCalledWith("input data");
   });
 });

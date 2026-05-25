@@ -302,4 +302,134 @@ describe("Coordinator", () => {
       JSON.stringify({ text: "✅ test/repo · 0.80 · job-1\nGreat Job" }),
     );
   });
+
+  // processEvent with non-URL repoUrl uses raw string fallback
+  it("uses raw repoUrl when it is not a valid URL", async () => {
+    const event = makeEvent({ status: "done", title: "Bare repo", repoUrl: "not-a-url" });
+    await coordinator.processEvent(event);
+
+    expect(mockRedisPublish).toHaveBeenCalledWith(
+      "cca:notify:test-ns",
+      JSON.stringify({ text: "✅ not-a-url · job-1\nBare repo" }),
+    );
+  });
+
+  // processEvent with status other than done/failed does not notify
+  it("does not notify when status is running", async () => {
+    const event = makeEvent({ status: "running" });
+    await coordinator.processEvent(event);
+    expect(mockRedisPublish).not.toHaveBeenCalled();
+  });
+
+  it("does not notify when status is pending", async () => {
+    const event = makeEvent({ status: "pending" });
+    await coordinator.processEvent(event);
+    expect(mockRedisPublish).not.toHaveBeenCalled();
+  });
+
+  // coordinatorPlan is ignored when status is failed (no spawn, but notifies)
+  it("does not spawn next job when status is failed even if coordinatorPlan is set", async () => {
+    const event = makeEvent({
+      status: "failed",
+      coordinatorPlan: { next_step: { repo_url: "https://github.com/x/y", task: "next" } },
+    });
+    await coordinator.processEvent(event);
+    expect(manager.spawn).not.toHaveBeenCalled();
+    expect(mockRedisPublish).toHaveBeenCalledWith(
+      "cca:notify:test-ns",
+      expect.stringContaining("❌"),
+    );
+  });
+
+  // stop() before start() is a no-op
+  it("stop() before start() does not throw", async () => {
+    const freshCoordinator = new Coordinator(makeManager() as any, "fresh-ns");
+    await expect(freshCoordinator.stop()).resolves.toBeUndefined();
+  });
+
+  // start() when Redis is unavailable skips xgroup and still schedules poll
+  it("start() when redis is null skips xgroup creation", async () => {
+    // Use mockReturnValueOnce (NOT mockReturnValue) to avoid polluting subsequent tests.
+    // start() calls getRedis() once for xgroup, then replayMissedEvents() calls it once more.
+    mockGetRedis
+      .mockReturnValueOnce(null) // for xgroup inside start()
+      .mockReturnValueOnce(null); // for replayMissedEvents
+
+    const freshCoordinator = new Coordinator(makeManager() as any, "no-redis-ns");
+    await freshCoordinator.start();
+    await freshCoordinator.stop();
+
+    expect(mockRedisXgroup).not.toHaveBeenCalled();
+  });
+
+  // replayMissedEvents skips entries with empty fields array
+  it("replayMissedEvents skips entries with empty fields (tombstoned entries)", async () => {
+    // A stream entry with an empty fields array represents a deleted / tombstoned entry
+    const tombstonedEntry: [string, string[]] = ["2-0", []];
+    mockRedisXreadgroup
+      .mockResolvedValueOnce([["cca:event-stream", [tombstonedEntry]]]) // replay with tombstone
+      .mockResolvedValueOnce(null); // subsequent poll
+
+    await coordinator.start();
+    await coordinator.stop();
+
+    // The tombstoned entry should have been skipped — spawn should not have been called
+    expect(manager.spawn).not.toHaveBeenCalled();
+    // xack should not have been called for tombstoned entries (they were skipped silently)
+    expect(mockRedisXack).not.toHaveBeenCalledWith("cca:event-stream", "coordinator", "2-0");
+  });
+
+  // notify() when redis publish throws logs warning and does not throw
+  it("notify() logs warning but does not throw when redis.publish rejects", async () => {
+    mockRedisPublish.mockRejectedValueOnce(new Error("connection lost"));
+    await expect(notify("test-ns", "some message")).resolves.toBeUndefined();
+  });
+
+  // notify() lpush operation after a publish failure still does not throw
+  it("notify() with lpush failure does not throw", async () => {
+    mockRedisLpush.mockRejectedValueOnce(new Error("OOM"));
+    await expect(notify("test-ns", "msg")).resolves.toBeUndefined();
+  });
+
+  // repoUrl with only one path segment (no org/repo pair) uses full raw URL
+  it("uses full URL when repoUrl has only one path segment (cannot form org/repo)", async () => {
+    const event = makeEvent({
+      status: "done",
+      title: "One segment",
+      repoUrl: "https://github.com/onlyone",
+    });
+    await coordinator.processEvent(event);
+
+    // pathname is "/onlyone" → split gives ["onlyone"] → length < 2 → no org/repo pair
+    // → falls back to the full original URL string
+    expect(mockRedisPublish).toHaveBeenCalledWith(
+      "cca:notify:test-ns",
+      JSON.stringify({ text: "✅ https://github.com/onlyone · job-1\nOne segment" }),
+    );
+  });
+
+  // title longer than 160 chars is truncated to 160 chars in notification
+  it("truncates title to 160 characters in notification", async () => {
+    const longTitle = "A".repeat(200);
+    const event = makeEvent({ status: "done", title: longTitle, repoUrl: "https://github.com/x/y" });
+    await coordinator.processEvent(event);
+
+    const calls = mockRedisPublish.mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
+    const payload = JSON.parse(calls[0][1] as string) as { text: string };
+    const lines = payload.text.split("\n");
+    // Second line is the truncated title
+    expect(lines[1].length).toBeLessThanOrEqual(160);
+  });
+
+  // spawnNext logs a warning when spawn rejects
+  it("spawnNext logs warning when manager.spawn rejects on done event with coordinator plan", async () => {
+    manager.spawn.mockRejectedValueOnce(new Error("docker failure"));
+    const event = makeEvent({
+      status: "done",
+      coordinatorPlan: { next_step: { repo_url: "https://github.com/x/y", task: "task" } },
+    });
+    // Should not throw even when spawn rejects
+    await expect(coordinator.processEvent(event)).resolves.toBeUndefined();
+  });
 });

@@ -2,122 +2,183 @@ import { describe, it, expect } from "vitest";
 import { buildEvaluatorTask } from "./evaluator.js";
 import type { EvaluatorOptions } from "./evaluator.js";
 
-const BASE_OPTS: EvaluatorOptions = {
-  variantJobIds: ["job-1", "job-2"],
-  variantBranches: ["feat/v1", undefined],
-  branchEval: "test_pass_rate",
-  branchSelect: "best_score",
-  stepId: "step-0",
-};
+// ─── helpers ─────────────────────────────────────────────────────────────────
+
+function makeOpts(overrides: Partial<EvaluatorOptions> = {}): EvaluatorOptions {
+  return {
+    variantJobIds: ["job-a", "job-b"],
+    variantBranches: ["feat/a", "feat/b"],
+    branchEval: "test_pass_rate",
+    branchSelect: "best_score",
+    stepId: "step-1",
+    ...overrides,
+  };
+}
+
+// ─── buildEvaluatorTask — structural checks ───────────────────────────────────
 
 describe("buildEvaluatorTask", () => {
-  it("includes the step ID", () => {
-    const out = buildEvaluatorTask(BASE_OPTS);
-    expect(out).toContain("step: step-0");
+  it("includes the step ID in the header", () => {
+    const result = buildEvaluatorTask(makeOpts({ stepId: "step-42" }));
+    expect(result).toContain("step-42");
   });
 
-  it("mentions the variant count", () => {
-    const out = buildEvaluatorTask(BASE_OPTS);
-    expect(out).toContain("evaluate 2 variant");
+  it("includes all variant job IDs in the list", () => {
+    const result = buildEvaluatorTask(makeOpts());
+    expect(result).toContain("job-a");
+    expect(result).toContain("job-b");
   });
 
-  it("lists all variant job IDs", () => {
-    const out = buildEvaluatorTask(BASE_OPTS);
-    expect(out).toContain("job_id=job-1");
-    expect(out).toContain("job_id=job-2");
+  it("includes branch names when provided", () => {
+    const result = buildEvaluatorTask(makeOpts({ variantBranches: ["feat/x", "feat/y"] }));
+    expect(result).toContain("feat/x");
+    expect(result).toContain("feat/y");
   });
 
-  it("includes branch when provided", () => {
-    const out = buildEvaluatorTask(BASE_OPTS);
-    expect(out).toContain("branch=feat/v1");
+  it("omits branch= when branch is undefined", () => {
+    const result = buildEvaluatorTask(
+      makeOpts({ variantBranches: [undefined, undefined] })
+    );
+    // Should not contain "branch=" anywhere in the variant list section
+    const variantSection = result.split("## Evaluation Instructions")[0];
+    expect(variantSection).not.toContain("branch=");
   });
 
-  it("omits branch field for undefined branches", () => {
-    const out = buildEvaluatorTask(BASE_OPTS);
-    // Variant 2 has no branch — should not emit "branch=undefined"
-    expect(out).not.toContain("branch=undefined");
+  it("labels variants with sequential numbers", () => {
+    const result = buildEvaluatorTask(makeOpts());
+    expect(result).toContain("Variant 1");
+    expect(result).toContain("Variant 2");
+  });
+
+  it("includes set_job_score instruction for all variants", () => {
+    const result = buildEvaluatorTask(makeOpts());
+    expect(result).toContain("set_job_score");
   });
 
   it("includes WINNER output format", () => {
-    const out = buildEvaluatorTask(BASE_OPTS);
-    expect(out).toContain("WINNER:");
-    expect(out).toContain('"job_id"');
-    expect(out).toContain('"score"');
+    const result = buildEvaluatorTask(makeOpts());
+    expect(result).toContain("WINNER:");
+    expect(result).toContain("job_id");
+    expect(result).toContain("variant_index");
+    expect(result).toContain("score");
+    expect(result).toContain("reason");
   });
 
-  it("reminds to call set_job_score for all variants", () => {
-    const out = buildEvaluatorTask(BASE_OPTS);
-    expect(out).toContain("set_job_score");
-  });
-
-  // --- branchEval variants ---
-
-  it("test_pass_rate: includes pass rate scoring instructions", () => {
-    const out = buildEvaluatorTask({ ...BASE_OPTS, branchEval: "test_pass_rate" });
-    expect(out).toContain("pass_rate");
-    expect(out).toContain("passing_tests");
-    expect(out).toContain("exitCode");
-  });
-
-  it("pr_merged: includes PR merge scoring instructions", () => {
-    const out = buildEvaluatorTask({ ...BASE_OPTS, branchEval: "pr_merged" });
-    expect(out).toContain("pr_merged");
-    expect(out).toContain("pr_created");
-  });
-
-  it("manual: includes manual review scoring instructions", () => {
-    const out = buildEvaluatorTask({ ...BASE_OPTS, branchEval: "manual" });
-    expect(out).toContain("quality");
-    expect(out).toContain("completeness");
-  });
-
-  // --- branchSelect variants ---
-
-  it("best_score: selects highest scoring variant", () => {
-    const out = buildEvaluatorTask({ ...BASE_OPTS, branchSelect: "best_score" });
-    expect(out).toContain("highest score");
-  });
-
-  it("score_prop: describes roulette wheel selection with correct uniform probability", () => {
-    const out = buildEvaluatorTask({
-      ...BASE_OPTS,
-      branchSelect: "score_prop",
-      variantJobIds: ["a", "b", "c"],
-      variantBranches: [undefined, undefined, undefined],
+  it("correctly counts variants in header", () => {
+    const threeVariants = makeOpts({
+      variantJobIds: ["j1", "j2", "j3"],
+      variantBranches: ["b1", "b2", "b3"],
     });
-    expect(out).toContain("score-proportional");
-    expect(out).toContain("1/3");
+    const result = buildEvaluatorTask(threeVariants);
+    expect(result).toContain("evaluate 3 variant");
+  });
+});
+
+// ─── branchEval modes ─────────────────────────────────────────────────────────
+
+describe("buildEvaluatorTask — branchEval: test_pass_rate", () => {
+  it("includes test pass rate scoring formula", () => {
+    const result = buildEvaluatorTask(makeOpts({ branchEval: "test_pass_rate" }));
+    expect(result).toContain("pass_rate");
+    expect(result).toContain("exitCode");
+    expect(result).toContain("0.7");
+    expect(result).toContain("0.3");
   });
 
-  it("latest: selects most recently completed variant", () => {
-    const out = buildEvaluatorTask({ ...BASE_OPTS, branchSelect: "latest" });
-    expect(out).toContain("recent completion time");
+  it("includes instructions to search for test result patterns", () => {
+    const result = buildEvaluatorTask(makeOpts({ branchEval: "test_pass_rate" }));
+    expect(result).toContain("passing");
+    expect(result).toContain("failing");
+  });
+});
+
+describe("buildEvaluatorTask — branchEval: pr_merged", () => {
+  it("includes PR merged scoring instructions", () => {
+    const result = buildEvaluatorTask(makeOpts({ branchEval: "pr_merged" }));
+    expect(result).toContain("pr_merged");
+    expect(result).toContain("1.0");
+    expect(result).toContain("0.5");
   });
 
-  // --- edge cases ---
+  it("mentions PR URL retrieval", () => {
+    const result = buildEvaluatorTask(makeOpts({ branchEval: "pr_merged" }));
+    expect(result).toContain("PR");
+  });
+});
 
-  it("works with a single variant and no branch", () => {
-    const out = buildEvaluatorTask({
-      variantJobIds: ["solo-job"],
-      variantBranches: [undefined],
-      branchEval: "manual",
-      branchSelect: "latest",
-      stepId: "s1",
-    });
-    expect(out).toContain("job_id=solo-job");
-    expect(out).toContain("evaluate 1 variant");
-    expect(out).toContain("step: s1");
+describe("buildEvaluatorTask — branchEval: manual", () => {
+  it("includes manual evaluation instructions", () => {
+    const result = buildEvaluatorTask(makeOpts({ branchEval: "manual" }));
+    expect(result).toContain("manually");
+    expect(result).toContain("0.0 to 1.0");
+  });
+});
+
+// ─── branchSelect modes ───────────────────────────────────────────────────────
+
+describe("buildEvaluatorTask — branchSelect: best_score", () => {
+  it("instructs to pick the highest score", () => {
+    const result = buildEvaluatorTask(makeOpts({ branchSelect: "best_score" }));
+    expect(result).toContain("highest score");
   });
 
-  it("numbers variants starting from 1", () => {
-    const out = buildEvaluatorTask(BASE_OPTS);
-    expect(out).toContain("Variant 1:");
-    expect(out).toContain("Variant 2:");
+  it("instructs to break ties by lowest variant index", () => {
+    const result = buildEvaluatorTask(makeOpts({ branchSelect: "best_score" }));
+    expect(result).toContain("tie");
+  });
+});
+
+describe("buildEvaluatorTask — branchSelect: score_prop", () => {
+  it("includes roulette wheel selection description", () => {
+    const result = buildEvaluatorTask(makeOpts({ branchSelect: "score_prop" }));
+    expect(result).toContain("score-proportional");
+    expect(result).toContain("roulette");
   });
 
-  it("returns a non-empty string", () => {
-    const out = buildEvaluatorTask(BASE_OPTS);
-    expect(typeof out).toBe("string");
-    expect(out.length).toBeGreaterThan(100);
+  it("includes uniform fallback when all scores are zero", () => {
+    const result = buildEvaluatorTask(makeOpts({ branchSelect: "score_prop" }));
+    expect(result).toContain("all scores are 0");
+  });
+
+  it("includes variant count in the uniform fallback formula", () => {
+    const twoVariants = makeOpts({ branchSelect: "score_prop" });
+    const result = buildEvaluatorTask(twoVariants);
+    expect(result).toContain("1/2");
+  });
+});
+
+describe("buildEvaluatorTask — branchSelect: latest", () => {
+  it("instructs to select most recently completed variant", () => {
+    const result = buildEvaluatorTask(makeOpts({ branchSelect: "latest" }));
+    expect(result).toContain("most recent");
+  });
+
+  it("instructs to fall back to highest variant index on tie", () => {
+    const result = buildEvaluatorTask(makeOpts({ branchSelect: "latest" }));
+    expect(result).toContain("highest variant index");
+  });
+});
+
+// ─── edge cases ───────────────────────────────────────────────────────────────
+
+describe("buildEvaluatorTask — edge cases", () => {
+  it("works with a single variant", () => {
+    const result = buildEvaluatorTask(
+      makeOpts({ variantJobIds: ["solo-job"], variantBranches: ["feat/solo"] })
+    );
+    expect(result).toContain("solo-job");
+    expect(result).toContain("Variant 1");
+    expect(result).not.toContain("Variant 2");
+  });
+
+  it("note instructs to call set_job_score for ALL variants including 0.0", () => {
+    const result = buildEvaluatorTask(makeOpts());
+    expect(result).toContain("ALL variants");
+    expect(result).toContain("0.0");
+  });
+
+  it("fallback policy when all variants scored 0.0", () => {
+    const result = buildEvaluatorTask(makeOpts());
+    expect(result).toContain("all variants scored 0.0");
   });
 });

@@ -1,0 +1,2285 @@
+{
+  "generated": "2026-05-25T05:20:00.128Z",
+  "note": "meta-agent.ts excluded from coverage run due to 12 pre-existing test failures (redis.del mock bug)",
+  "totals": {
+    "statements": {
+      "covered": 1467,
+      "total": 3246,
+      "pct": 45.19
+    },
+    "branches": {
+      "covered": 449,
+      "total": 925,
+      "pct": 48.54
+    },
+    "functions": {
+      "covered": 182,
+      "total": 414,
+      "pct": 43.96
+    }
+  },
+  "files": [
+    {
+      "file": "src/profiles.ts",
+      "statements": {
+        "covered": 0,
+        "total": 6,
+        "pct": 0
+      },
+      "branches": {
+        "covered": 0,
+        "total": 1,
+        "pct": 0
+      },
+      "functions": {
+        "covered": 0,
+        "total": 6,
+        "pct": 0
+      },
+      "uncoveredFunctions": [
+        {
+          "name": "loadProfiles",
+          "line": 5
+        },
+        {
+          "name": "upsertProfile",
+          "line": 9
+        },
+        {
+          "name": "getProfile",
+          "line": 13
+        },
+        {
+          "name": "deleteProfile",
+          "line": 17
+        },
+        {
+          "name": "interpolate",
+          "line": 21
+        },
+        {
+          "name": "(anonymous_5)",
+          "line": 22
+        }
+      ],
+      "uncoveredBranches": [
+        "0"
+      ]
+    },
+    {
+      "file": "src/drivers/aider.ts",
+      "statements": {
+        "covered": 0,
+        "total": 64,
+        "pct": 0
+      },
+      "branches": {
+        "covered": 0,
+        "total": 18,
+        "pct": 0
+      },
+      "functions": {
+        "covered": 0,
+        "total": 12,
+        "pct": 0
+      },
+      "uncoveredFunctions": [
+        {
+          "name": "(anonymous_0)",
+          "line": 15
+        },
+        {
+          "name": "(anonymous_1)",
+          "line": 33
+        },
+        {
+          "name": "(anonymous_2)",
+          "line": 37
+        },
+        {
+          "name": "(anonymous_3)",
+          "line": 66
+        },
+        {
+          "name": "(anonymous_4)",
+          "line": 70
+        },
+        {
+          "name": "(anonymous_5)",
+          "line": 77
+        },
+        {
+          "name": "(anonymous_6)",
+          "line": 87
+        },
+        {
+          "name": "(anonymous_7)",
+          "line": 92
+        },
+        {
+          "name": "(anonymous_8)",
+          "line": 99
+        },
+        {
+          "name": "(anonymous_9)",
+          "line": 104
+        },
+        {
+          "name": "(anonymous_10)",
+          "line": 109
+        },
+        {
+          "name": "(anonymous_11)",
+          "line": 118
+        }
+      ],
+      "uncoveredBranches": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17"
+      ]
+    },
+    {
+      "file": "src/drivers/amp.ts",
+      "statements": {
+        "covered": 0,
+        "total": 116,
+        "pct": 0
+      },
+      "branches": {
+        "covered": 0,
+        "total": 49,
+        "pct": 0
+      },
+      "functions": {
+        "covered": 0,
+        "total": 13,
+        "pct": 0
+      },
+      "uncoveredFunctions": [
+        {
+          "name": "(anonymous_0)",
+          "line": 17
+        },
+        {
+          "name": "(anonymous_1)",
+          "line": 35
+        },
+        {
+          "name": "(anonymous_2)",
+          "line": 39
+        },
+        {
+          "name": "(anonymous_3)",
+          "line": 68
+        },
+        {
+          "name": "(anonymous_4)",
+          "line": 72
+        },
+        {
+          "name": "(anonymous_5)",
+          "line": 79
+        },
+        {
+          "name": "(anonymous_6)",
+          "line": 95
+        },
+        {
+          "name": "(anonymous_7)",
+          "line": 100
+        },
+        {
+          "name": "(anonymous_8)",
+          "line": 107
+        },
+        {
+          "name": "(anonymous_9)",
+          "line": 119
+        },
+        {
+          "name": "(anonymous_10)",
+          "line": 124
+        },
+        {
+          "name": "(anonymous_11)",
+          "line": 133
+        },
+        {
+          "name": "parseAmpEvent",
+          "line": 155
+        }
+      ],
+      "uncoveredBranches": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18",
+        "19",
+        "20",
+        "21",
+        "22",
+        "23",
+        "24",
+        "25",
+        "26",
+        "27",
+        "28",
+        "29",
+        "30",
+        "31",
+        "32",
+        "33",
+        "34",
+        "35",
+        "36",
+        "37",
+        "38",
+        "39",
+        "40",
+        "41",
+        "42",
+        "43",
+        "44",
+        "45",
+        "46",
+        "47",
+        "48"
+      ]
+    },
+    {
+      "file": "src/drivers/codex.ts",
+      "statements": {
+        "covered": 0,
+        "total": 65,
+        "pct": 0
+      },
+      "branches": {
+        "covered": 0,
+        "total": 18,
+        "pct": 0
+      },
+      "functions": {
+        "covered": 0,
+        "total": 12,
+        "pct": 0
+      },
+      "uncoveredFunctions": [
+        {
+          "name": "(anonymous_0)",
+          "line": 18
+        },
+        {
+          "name": "(anonymous_1)",
+          "line": 38
+        },
+        {
+          "name": "(anonymous_2)",
+          "line": 42
+        },
+        {
+          "name": "(anonymous_3)",
+          "line": 69
+        },
+        {
+          "name": "(anonymous_4)",
+          "line": 73
+        },
+        {
+          "name": "(anonymous_5)",
+          "line": 80
+        },
+        {
+          "name": "(anonymous_6)",
+          "line": 90
+        },
+        {
+          "name": "(anonymous_7)",
+          "line": 95
+        },
+        {
+          "name": "(anonymous_8)",
+          "line": 102
+        },
+        {
+          "name": "(anonymous_9)",
+          "line": 107
+        },
+        {
+          "name": "(anonymous_10)",
+          "line": 112
+        },
+        {
+          "name": "(anonymous_11)",
+          "line": 121
+        }
+      ],
+      "uncoveredBranches": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17"
+      ]
+    },
+    {
+      "file": "src/drivers/gemini.ts",
+      "statements": {
+        "covered": 0,
+        "total": 118,
+        "pct": 0
+      },
+      "branches": {
+        "covered": 0,
+        "total": 51,
+        "pct": 0
+      },
+      "functions": {
+        "covered": 0,
+        "total": 13,
+        "pct": 0
+      },
+      "uncoveredFunctions": [
+        {
+          "name": "(anonymous_0)",
+          "line": 18
+        },
+        {
+          "name": "(anonymous_1)",
+          "line": 36
+        },
+        {
+          "name": "(anonymous_2)",
+          "line": 40
+        },
+        {
+          "name": "(anonymous_3)",
+          "line": 67
+        },
+        {
+          "name": "(anonymous_4)",
+          "line": 71
+        },
+        {
+          "name": "(anonymous_5)",
+          "line": 78
+        },
+        {
+          "name": "(anonymous_6)",
+          "line": 94
+        },
+        {
+          "name": "(anonymous_7)",
+          "line": 99
+        },
+        {
+          "name": "(anonymous_8)",
+          "line": 106
+        },
+        {
+          "name": "(anonymous_9)",
+          "line": 118
+        },
+        {
+          "name": "(anonymous_10)",
+          "line": 123
+        },
+        {
+          "name": "(anonymous_11)",
+          "line": 132
+        },
+        {
+          "name": "parseGeminiEvent",
+          "line": 157
+        }
+      ],
+      "uncoveredBranches": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18",
+        "19",
+        "20",
+        "21",
+        "22",
+        "23",
+        "24",
+        "25",
+        "26",
+        "27",
+        "28",
+        "29",
+        "30",
+        "31",
+        "32",
+        "33",
+        "34",
+        "35",
+        "36",
+        "37",
+        "38",
+        "39",
+        "40",
+        "41",
+        "42",
+        "43",
+        "44",
+        "45",
+        "46",
+        "47",
+        "48",
+        "49",
+        "50"
+      ]
+    },
+    {
+      "file": "src/drivers/types.ts",
+      "statements": {
+        "covered": 0,
+        "total": 0,
+        "pct": 100
+      },
+      "branches": {
+        "covered": 0,
+        "total": 0,
+        "pct": 100
+      },
+      "functions": {
+        "covered": 0,
+        "total": 1,
+        "pct": 0
+      },
+      "uncoveredFunctions": [
+        {
+          "name": "(anonymous_0)",
+          "line": 60
+        }
+      ],
+      "uncoveredBranches": []
+    },
+    {
+      "file": "src/meta-agent.ts",
+      "statements": {
+        "covered": 10,
+        "total": 227,
+        "pct": 4.41
+      },
+      "branches": {
+        "covered": 1,
+        "total": 46,
+        "pct": 2.17
+      },
+      "functions": {
+        "covered": 1,
+        "total": 33,
+        "pct": 3.03
+      },
+      "uncoveredFunctions": [
+        {
+          "name": "(anonymous_1)",
+          "line": 59
+        },
+        {
+          "name": "(anonymous_2)",
+          "line": 60
+        },
+        {
+          "name": "(anonymous_3)",
+          "line": 65
+        },
+        {
+          "name": "(anonymous_4)",
+          "line": 72
+        },
+        {
+          "name": "(anonymous_5)",
+          "line": 102
+        },
+        {
+          "name": "(anonymous_6)",
+          "line": 103
+        },
+        {
+          "name": "(anonymous_7)",
+          "line": 105
+        },
+        {
+          "name": "(anonymous_8)",
+          "line": 106
+        },
+        {
+          "name": "(anonymous_9)",
+          "line": 115
+        },
+        {
+          "name": "(anonymous_10)",
+          "line": 131
+        },
+        {
+          "name": "(anonymous_11)",
+          "line": 137
+        },
+        {
+          "name": "(anonymous_12)",
+          "line": 147
+        },
+        {
+          "name": "(anonymous_13)",
+          "line": 167
+        },
+        {
+          "name": "(anonymous_14)",
+          "line": 184
+        },
+        {
+          "name": "(anonymous_15)",
+          "line": 228
+        },
+        {
+          "name": "(anonymous_16)",
+          "line": 244
+        },
+        {
+          "name": "(anonymous_17)",
+          "line": 249
+        },
+        {
+          "name": "(anonymous_18)",
+          "line": 254
+        },
+        {
+          "name": "(anonymous_19)",
+          "line": 258
+        },
+        {
+          "name": "(anonymous_20)",
+          "line": 263
+        },
+        {
+          "name": "(anonymous_21)",
+          "line": 264
+        },
+        {
+          "name": "(anonymous_22)",
+          "line": 270
+        },
+        {
+          "name": "(anonymous_23)",
+          "line": 287
+        },
+        {
+          "name": "(anonymous_24)",
+          "line": 296
+        },
+        {
+          "name": "(anonymous_25)",
+          "line": 303
+        },
+        {
+          "name": "(anonymous_26)",
+          "line": 322
+        },
+        {
+          "name": "(anonymous_27)",
+          "line": 353
+        },
+        {
+          "name": "(anonymous_28)",
+          "line": 357
+        },
+        {
+          "name": "(anonymous_29)",
+          "line": 382
+        },
+        {
+          "name": "(anonymous_30)",
+          "line": 405
+        },
+        {
+          "name": "(anonymous_31)",
+          "line": 416
+        },
+        {
+          "name": "(anonymous_32)",
+          "line": 444
+        }
+      ],
+      "uncoveredBranches": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18",
+        "19",
+        "20",
+        "21",
+        "22",
+        "23",
+        "24",
+        "25",
+        "26",
+        "27",
+        "28",
+        "29",
+        "30",
+        "31",
+        "32",
+        "33",
+        "34",
+        "35",
+        "36",
+        "37",
+        "38",
+        "39",
+        "40",
+        "41",
+        "42",
+        "43",
+        "44",
+        "45"
+      ]
+    },
+    {
+      "file": "src/index.ts",
+      "statements": {
+        "covered": 225,
+        "total": 485,
+        "pct": 46.39
+      },
+      "branches": {
+        "covered": 46,
+        "total": 139,
+        "pct": 33.09
+      },
+      "functions": {
+        "covered": 5,
+        "total": 32,
+        "pct": 15.63
+      },
+      "uncoveredFunctions": [
+        {
+          "name": "(anonymous_4)",
+          "line": 991
+        },
+        {
+          "name": "(anonymous_5)",
+          "line": 1043
+        },
+        {
+          "name": "(anonymous_6)",
+          "line": 1150
+        },
+        {
+          "name": "(anonymous_7)",
+          "line": 1227
+        },
+        {
+          "name": "(anonymous_9)",
+          "line": 1307
+        },
+        {
+          "name": "(anonymous_10)",
+          "line": 1341
+        },
+        {
+          "name": "(anonymous_11)",
+          "line": 1342
+        },
+        {
+          "name": "(anonymous_12)",
+          "line": 1357
+        },
+        {
+          "name": "(anonymous_13)",
+          "line": 1526
+        },
+        {
+          "name": "(anonymous_14)",
+          "line": 1615
+        },
+        {
+          "name": "(anonymous_15)",
+          "line": 1619
+        },
+        {
+          "name": "(anonymous_16)",
+          "line": 1622
+        },
+        {
+          "name": "(anonymous_17)",
+          "line": 1624
+        },
+        {
+          "name": "(anonymous_18)",
+          "line": 1631
+        },
+        {
+          "name": "(anonymous_19)",
+          "line": 1636
+        },
+        {
+          "name": "(anonymous_20)",
+          "line": 1775
+        },
+        {
+          "name": "(anonymous_21)",
+          "line": 1781
+        },
+        {
+          "name": "(anonymous_22)",
+          "line": 1801
+        },
+        {
+          "name": "(anonymous_23)",
+          "line": 1813
+        },
+        {
+          "name": "(anonymous_24)",
+          "line": 1834
+        },
+        {
+          "name": "(anonymous_25)",
+          "line": 1839
+        },
+        {
+          "name": "(anonymous_26)",
+          "line": 1841
+        },
+        {
+          "name": "(anonymous_27)",
+          "line": 1863
+        },
+        {
+          "name": "(anonymous_28)",
+          "line": 1869
+        },
+        {
+          "name": "(anonymous_29)",
+          "line": 1920
+        },
+        {
+          "name": "(anonymous_30)",
+          "line": 1989
+        },
+        {
+          "name": "(anonymous_31)",
+          "line": 1992
+        }
+      ],
+      "uncoveredBranches": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "7",
+        "8",
+        "11",
+        "15",
+        "16",
+        "17",
+        "18",
+        "19",
+        "20",
+        "21",
+        "22",
+        "23",
+        "24",
+        "25",
+        "27",
+        "29",
+        "30",
+        "31",
+        "32",
+        "33",
+        "34",
+        "35",
+        "36",
+        "37",
+        "38",
+        "39",
+        "40",
+        "41",
+        "42",
+        "43",
+        "44",
+        "45",
+        "46",
+        "48",
+        "49",
+        "50",
+        "51",
+        "52",
+        "53",
+        "54",
+        "56",
+        "58",
+        "59",
+        "60",
+        "61",
+        "62",
+        "64",
+        "66",
+        "67",
+        "68",
+        "69",
+        "70",
+        "71",
+        "72",
+        "73",
+        "74",
+        "75",
+        "76",
+        "77",
+        "78",
+        "79",
+        "80",
+        "81",
+        "82",
+        "83",
+        "84",
+        "85",
+        "86",
+        "87",
+        "89",
+        "90",
+        "91",
+        "92",
+        "93",
+        "94",
+        "95",
+        "96",
+        "97",
+        "98",
+        "99",
+        "100",
+        "101",
+        "102",
+        "104",
+        "107",
+        "108",
+        "109",
+        "110",
+        "111",
+        "112",
+        "113",
+        "114",
+        "115",
+        "118",
+        "120",
+        "121",
+        "122",
+        "123",
+        "124",
+        "125",
+        "126",
+        "127",
+        "128",
+        "129",
+        "130",
+        "131",
+        "132",
+        "133",
+        "134",
+        "135",
+        "136",
+        "137",
+        "138"
+      ]
+    },
+    {
+      "file": "src/swarm.ts",
+      "statements": {
+        "covered": 37,
+        "total": 185,
+        "pct": 20
+      },
+      "branches": {
+        "covered": 10,
+        "total": 41,
+        "pct": 24.39
+      },
+      "functions": {
+        "covered": 8,
+        "total": 25,
+        "pct": 32
+      },
+      "uncoveredFunctions": [
+        {
+          "name": "saveSwarm",
+          "line": 70
+        },
+        {
+          "name": "loadSwarm",
+          "line": 82
+        },
+        {
+          "name": "decomposeGoal",
+          "line": 148
+        },
+        {
+          "name": "(anonymous_8)",
+          "line": 187
+        },
+        {
+          "name": "(anonymous_9)",
+          "line": 197
+        },
+        {
+          "name": "buildDecomposePrompt",
+          "line": 211
+        },
+        {
+          "name": "waitForAllSubJobs",
+          "line": 300
+        },
+        {
+          "name": "(anonymous_15)",
+          "line": 347
+        },
+        {
+          "name": "(anonymous_16)",
+          "line": 348
+        },
+        {
+          "name": "fetchJobRecord",
+          "line": 411
+        },
+        {
+          "name": "sleep",
+          "line": 422
+        },
+        {
+          "name": "(anonymous_19)",
+          "line": 423
+        },
+        {
+          "name": "runSwarm",
+          "line": 438
+        },
+        {
+          "name": "(anonymous_21)",
+          "line": 524
+        },
+        {
+          "name": "(anonymous_22)",
+          "line": 528
+        },
+        {
+          "name": "(anonymous_23)",
+          "line": 536
+        },
+        {
+          "name": "getSwarmStatus",
+          "line": 551
+        }
+      ],
+      "uncoveredBranches": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "6",
+        "7",
+        "8",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18",
+        "19",
+        "21",
+        "22",
+        "23",
+        "24",
+        "25",
+        "26",
+        "27",
+        "28",
+        "29",
+        "30",
+        "31",
+        "32",
+        "33",
+        "34",
+        "35",
+        "36",
+        "37",
+        "38",
+        "39",
+        "40"
+      ]
+    },
+    {
+      "file": "src/drivers/index.ts",
+      "statements": {
+        "covered": 3,
+        "total": 40,
+        "pct": 7.5
+      },
+      "branches": {
+        "covered": 1,
+        "total": 18,
+        "pct": 5.56
+      },
+      "functions": {
+        "covered": 1,
+        "total": 3,
+        "pct": 33.33
+      },
+      "uncoveredFunctions": [
+        {
+          "name": "listDrivers",
+          "line": 60
+        },
+        {
+          "name": "getDriverStatus",
+          "line": 67
+        }
+      ],
+      "uncoveredBranches": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17"
+      ]
+    },
+    {
+      "file": "src/claude.ts",
+      "statements": {
+        "covered": 22,
+        "total": 113,
+        "pct": 19.47
+      },
+      "branches": {
+        "covered": 8,
+        "total": 44,
+        "pct": 18.18
+      },
+      "functions": {
+        "covered": 4,
+        "total": 11,
+        "pct": 36.36
+      },
+      "uncoveredFunctions": [
+        {
+          "name": "runClaude",
+          "line": 49
+        },
+        {
+          "name": "(anonymous_1)",
+          "line": 98
+        },
+        {
+          "name": "(anonymous_2)",
+          "line": 162
+        },
+        {
+          "name": "(anonymous_3)",
+          "line": 168
+        },
+        {
+          "name": "(anonymous_4)",
+          "line": 169
+        },
+        {
+          "name": "(anonymous_5)",
+          "line": 171
+        },
+        {
+          "name": "extractToolName",
+          "line": 200
+        }
+      ],
+      "uncoveredBranches": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18",
+        "19",
+        "20",
+        "21",
+        "22",
+        "23",
+        "24",
+        "25",
+        "26",
+        "27",
+        "28",
+        "33",
+        "34",
+        "35",
+        "36",
+        "37",
+        "38",
+        "39",
+        "40",
+        "41"
+      ]
+    },
+    {
+      "file": "src/redis.ts",
+      "statements": {
+        "covered": 17,
+        "total": 55,
+        "pct": 30.91
+      },
+      "branches": {
+        "covered": 4,
+        "total": 9,
+        "pct": 44.44
+      },
+      "functions": {
+        "covered": 4,
+        "total": 9,
+        "pct": 44.44
+      },
+      "uncoveredFunctions": [
+        {
+          "name": "sleep",
+          "line": 10
+        },
+        {
+          "name": "(anonymous_1)",
+          "line": 11
+        },
+        {
+          "name": "(anonymous_4)",
+          "line": 30
+        },
+        {
+          "name": "tryDocker",
+          "line": 43
+        },
+        {
+          "name": "tryRedisDaemon",
+          "line": 66
+        }
+      ],
+      "uncoveredBranches": [
+        "0",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8"
+      ]
+    },
+    {
+      "file": "src/agent.ts",
+      "statements": {
+        "covered": 486,
+        "total": 846,
+        "pct": 57.45
+      },
+      "branches": {
+        "covered": 192,
+        "total": 254,
+        "pct": 75.59
+      },
+      "functions": {
+        "covered": 53,
+        "total": 107,
+        "pct": 49.53
+      },
+      "uncoveredFunctions": [
+        {
+          "name": "(anonymous_2)",
+          "line": 59
+        },
+        {
+          "name": "isLimitMessage",
+          "line": 125
+        },
+        {
+          "name": "(anonymous_7)",
+          "line": 126
+        },
+        {
+          "name": "parseResetTime",
+          "line": 143
+        },
+        {
+          "name": "calculateCost",
+          "line": 253
+        },
+        {
+          "name": "(anonymous_21)",
+          "line": 379
+        },
+        {
+          "name": "(anonymous_22)",
+          "line": 381
+        },
+        {
+          "name": "(anonymous_27)",
+          "line": 451
+        },
+        {
+          "name": "(anonymous_28)",
+          "line": 465
+        },
+        {
+          "name": "(anonymous_29)",
+          "line": 476
+        },
+        {
+          "name": "(anonymous_30)",
+          "line": 496
+        },
+        {
+          "name": "(anonymous_32)",
+          "line": 503
+        },
+        {
+          "name": "(anonymous_38)",
+          "line": 597
+        },
+        {
+          "name": "(anonymous_42)",
+          "line": 693
+        },
+        {
+          "name": "(anonymous_45)",
+          "line": 721
+        },
+        {
+          "name": "(anonymous_46)",
+          "line": 747
+        },
+        {
+          "name": "(anonymous_47)",
+          "line": 762
+        },
+        {
+          "name": "(anonymous_48)",
+          "line": 765
+        },
+        {
+          "name": "(anonymous_49)",
+          "line": 769
+        },
+        {
+          "name": "(anonymous_54)",
+          "line": 940
+        },
+        {
+          "name": "(anonymous_55)",
+          "line": 947
+        },
+        {
+          "name": "(anonymous_57)",
+          "line": 966
+        },
+        {
+          "name": "(anonymous_58)",
+          "line": 986
+        },
+        {
+          "name": "(anonymous_59)",
+          "line": 1007
+        },
+        {
+          "name": "(anonymous_61)",
+          "line": 1036
+        },
+        {
+          "name": "(anonymous_62)",
+          "line": 1042
+        },
+        {
+          "name": "(anonymous_63)",
+          "line": 1047
+        },
+        {
+          "name": "(anonymous_64)",
+          "line": 1073
+        },
+        {
+          "name": "(anonymous_65)",
+          "line": 1081
+        },
+        {
+          "name": "(anonymous_68)",
+          "line": 1156
+        },
+        {
+          "name": "(anonymous_69)",
+          "line": 1167
+        },
+        {
+          "name": "(anonymous_70)",
+          "line": 1171
+        },
+        {
+          "name": "(anonymous_71)",
+          "line": 1197
+        },
+        {
+          "name": "(anonymous_72)",
+          "line": 1226
+        },
+        {
+          "name": "(anonymous_73)",
+          "line": 1227
+        },
+        {
+          "name": "(anonymous_76)",
+          "line": 1267
+        },
+        {
+          "name": "(anonymous_77)",
+          "line": 1269
+        },
+        {
+          "name": "(anonymous_78)",
+          "line": 1273
+        },
+        {
+          "name": "(anonymous_80)",
+          "line": 1300
+        },
+        {
+          "name": "(anonymous_81)",
+          "line": 1303
+        },
+        {
+          "name": "(anonymous_83)",
+          "line": 1318
+        },
+        {
+          "name": "(anonymous_84)",
+          "line": 1318
+        },
+        {
+          "name": "(anonymous_85)",
+          "line": 1323
+        },
+        {
+          "name": "(anonymous_86)",
+          "line": 1343
+        },
+        {
+          "name": "(anonymous_87)",
+          "line": 1347
+        },
+        {
+          "name": "(anonymous_88)",
+          "line": 1357
+        },
+        {
+          "name": "(anonymous_89)",
+          "line": 1374
+        },
+        {
+          "name": "(anonymous_90)",
+          "line": 1380
+        },
+        {
+          "name": "(anonymous_91)",
+          "line": 1386
+        },
+        {
+          "name": "(anonymous_94)",
+          "line": 1411
+        },
+        {
+          "name": "(anonymous_95)",
+          "line": 1412
+        },
+        {
+          "name": "(anonymous_96)",
+          "line": 1430
+        },
+        {
+          "name": "(anonymous_97)",
+          "line": 1431
+        },
+        {
+          "name": "(anonymous_106)",
+          "line": 1564
+        }
+      ],
+      "uncoveredBranches": [
+        "1",
+        "2",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "17",
+        "20",
+        "21",
+        "25",
+        "26",
+        "27",
+        "28",
+        "29",
+        "30",
+        "34",
+        "35",
+        "40",
+        "41",
+        "42",
+        "46",
+        "47",
+        "48",
+        "53",
+        "54",
+        "55",
+        "56",
+        "57",
+        "58",
+        "59",
+        "60",
+        "61",
+        "62",
+        "63",
+        "64",
+        "65",
+        "66",
+        "73",
+        "74",
+        "75",
+        "76",
+        "78",
+        "80",
+        "81",
+        "93",
+        "94",
+        "96",
+        "98",
+        "99",
+        "100",
+        "101",
+        "102",
+        "103",
+        "104",
+        "106",
+        "107",
+        "108",
+        "112",
+        "113",
+        "114",
+        "115",
+        "118",
+        "119",
+        "120",
+        "121",
+        "122",
+        "123",
+        "124",
+        "125",
+        "126",
+        "127",
+        "128",
+        "129",
+        "130",
+        "131",
+        "134",
+        "135",
+        "136",
+        "137",
+        "142",
+        "143",
+        "144",
+        "145",
+        "146",
+        "147",
+        "154",
+        "155",
+        "156",
+        "161",
+        "162",
+        "163",
+        "164",
+        "165",
+        "166",
+        "168",
+        "171",
+        "172",
+        "174",
+        "175",
+        "176",
+        "177",
+        "178",
+        "179",
+        "180",
+        "181",
+        "182",
+        "184",
+        "185",
+        "186",
+        "187",
+        "188",
+        "189",
+        "190",
+        "192",
+        "194",
+        "196",
+        "197",
+        "198",
+        "200",
+        "201",
+        "203",
+        "204",
+        "205",
+        "206",
+        "207",
+        "208",
+        "209",
+        "210",
+        "212",
+        "213",
+        "214",
+        "215",
+        "216",
+        "217",
+        "218",
+        "219",
+        "220",
+        "222",
+        "223",
+        "224",
+        "225",
+        "226",
+        "227",
+        "228",
+        "229",
+        "232",
+        "234",
+        "241",
+        "243",
+        "244",
+        "246",
+        "247",
+        "248",
+        "250",
+        "252",
+        "253"
+      ]
+    },
+    {
+      "file": "src/store.ts",
+      "statements": {
+        "covered": 104,
+        "total": 202,
+        "pct": 51.49
+      },
+      "branches": {
+        "covered": 26,
+        "total": 40,
+        "pct": 65
+      },
+      "functions": {
+        "covered": 17,
+        "total": 28,
+        "pct": 60.71
+      },
+      "uncoveredFunctions": [
+        {
+          "name": "diskLoadProfiles",
+          "line": 32
+        },
+        {
+          "name": "diskSaveProfiles",
+          "line": 38
+        },
+        {
+          "name": "(anonymous_9)",
+          "line": 182
+        },
+        {
+          "name": "(anonymous_11)",
+          "line": 200
+        },
+        {
+          "name": "(anonymous_15)",
+          "line": 268
+        },
+        {
+          "name": "(anonymous_17)",
+          "line": 283
+        },
+        {
+          "name": "(anonymous_18)",
+          "line": 286
+        },
+        {
+          "name": "(anonymous_19)",
+          "line": 306
+        },
+        {
+          "name": "(anonymous_20)",
+          "line": 314
+        },
+        {
+          "name": "(anonymous_21)",
+          "line": 326
+        },
+        {
+          "name": "(anonymous_23)",
+          "line": 357
+        }
+      ],
+      "uncoveredBranches": [
+        "0",
+        "2",
+        "4",
+        "5",
+        "7",
+        "8",
+        "9",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "17",
+        "18",
+        "19",
+        "20",
+        "21",
+        "22",
+        "23",
+        "24",
+        "25",
+        "26",
+        "27",
+        "28",
+        "29",
+        "30",
+        "31"
+      ]
+    },
+    {
+      "file": "src/docker.ts",
+      "statements": {
+        "covered": 85,
+        "total": 107,
+        "pct": 79.44
+      },
+      "branches": {
+        "covered": 18,
+        "total": 20,
+        "pct": 90
+      },
+      "functions": {
+        "covered": 7,
+        "total": 11,
+        "pct": 63.64
+      },
+      "uncoveredFunctions": [
+        {
+          "name": "(anonymous_6)",
+          "line": 123
+        },
+        {
+          "name": "(anonymous_7)",
+          "line": 126
+        },
+        {
+          "name": "(anonymous_9)",
+          "line": 220
+        },
+        {
+          "name": "(anonymous_10)",
+          "line": 232
+        }
+      ],
+      "uncoveredBranches": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "6",
+        "7",
+        "8",
+        "9",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "19"
+      ]
+    },
+    {
+      "file": "src/drivers/openai-compatible.ts",
+      "statements": {
+        "covered": 65,
+        "total": 142,
+        "pct": 45.77
+      },
+      "branches": {
+        "covered": 20,
+        "total": 49,
+        "pct": 40.82
+      },
+      "functions": {
+        "covered": 11,
+        "total": 16,
+        "pct": 68.75
+      },
+      "uncoveredFunctions": [
+        {
+          "name": "(anonymous_1)",
+          "line": 163
+        },
+        {
+          "name": "(anonymous_10)",
+          "line": 220
+        },
+        {
+          "name": "(anonymous_11)",
+          "line": 234
+        },
+        {
+          "name": "(anonymous_12)",
+          "line": 277
+        },
+        {
+          "name": "(anonymous_14)",
+          "line": 329
+        }
+      ],
+      "uncoveredBranches": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18",
+        "19",
+        "20",
+        "21",
+        "22",
+        "23",
+        "24",
+        "25",
+        "26",
+        "27",
+        "28",
+        "29",
+        "30",
+        "31",
+        "32",
+        "33",
+        "35",
+        "36",
+        "37",
+        "38",
+        "39",
+        "40",
+        "41",
+        "42",
+        "43",
+        "44",
+        "45",
+        "46",
+        "48"
+      ]
+    },
+    {
+      "file": "src/cron.ts",
+      "statements": {
+        "covered": 112,
+        "total": 137,
+        "pct": 81.75
+      },
+      "branches": {
+        "covered": 34,
+        "total": 36,
+        "pct": 94.44
+      },
+      "functions": {
+        "covered": 16,
+        "total": 22,
+        "pct": 72.73
+      },
+      "uncoveredFunctions": [
+        {
+          "name": "(anonymous_2)",
+          "line": 121
+        },
+        {
+          "name": "(anonymous_4)",
+          "line": 132
+        },
+        {
+          "name": "(anonymous_5)",
+          "line": 134
+        },
+        {
+          "name": "(anonymous_6)",
+          "line": 135
+        },
+        {
+          "name": "(anonymous_9)",
+          "line": 155
+        },
+        {
+          "name": "(anonymous_21)",
+          "line": 322
+        }
+      ],
+      "uncoveredBranches": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "13",
+        "14",
+        "15",
+        "16",
+        "18",
+        "19",
+        "21",
+        "23",
+        "24",
+        "27",
+        "29",
+        "30",
+        "31",
+        "32",
+        "33",
+        "34",
+        "35"
+      ]
+    },
+    {
+      "file": "src/coordinator.ts",
+      "statements": {
+        "covered": 86,
+        "total": 100,
+        "pct": 86
+      },
+      "branches": {
+        "covered": 32,
+        "total": 32,
+        "pct": 100
+      },
+      "functions": {
+        "covered": 10,
+        "total": 13,
+        "pct": 76.92
+      },
+      "uncoveredFunctions": [
+        {
+          "name": "(anonymous_5)",
+          "line": 77
+        },
+        {
+          "name": "(anonymous_6)",
+          "line": 79
+        },
+        {
+          "name": "(anonymous_7)",
+          "line": 80
+        }
+      ],
+      "uncoveredBranches": [
+        "1",
+        "2",
+        "3",
+        "5",
+        "6",
+        "8",
+        "9",
+        "11",
+        "14",
+        "18",
+        "21",
+        "23",
+        "24",
+        "25",
+        "26",
+        "27",
+        "29",
+        "30"
+      ]
+    },
+    {
+      "file": "src/drivers/claude-code.ts",
+      "statements": {
+        "covered": 29,
+        "total": 42,
+        "pct": 69.05
+      },
+      "branches": {
+        "covered": 8,
+        "total": 11,
+        "pct": 72.73
+      },
+      "functions": {
+        "covered": 10,
+        "total": 12,
+        "pct": 83.33
+      },
+      "uncoveredFunctions": [
+        {
+          "name": "(anonymous_1)",
+          "line": 21
+        },
+        {
+          "name": "(anonymous_7)",
+          "line": 60
+        }
+      ],
+      "uncoveredBranches": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "8",
+        "10"
+      ]
+    },
+    {
+      "file": "src/evaluator.ts",
+      "statements": {
+        "covered": 10,
+        "total": 14,
+        "pct": 71.43
+      },
+      "branches": {
+        "covered": 6,
+        "total": 6,
+        "pct": 100
+      },
+      "functions": {
+        "covered": 4,
+        "total": 4,
+        "pct": 100
+      },
+      "uncoveredFunctions": [],
+      "uncoveredBranches": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5"
+      ]
+    },
+    {
+      "file": "src/logger.ts",
+      "statements": {
+        "covered": 40,
+        "total": 41,
+        "pct": 97.56
+      },
+      "branches": {
+        "covered": 7,
+        "total": 7,
+        "pct": 100
+      },
+      "functions": {
+        "covered": 7,
+        "total": 7,
+        "pct": 100
+      },
+      "uncoveredFunctions": [],
+      "uncoveredBranches": [
+        "0",
+        "6"
+      ]
+    },
+    {
+      "file": "src/mcp-inject.ts",
+      "statements": {
+        "covered": 23,
+        "total": 24,
+        "pct": 95.83
+      },
+      "branches": {
+        "covered": 5,
+        "total": 5,
+        "pct": 100
+      },
+      "functions": {
+        "covered": 2,
+        "total": 2,
+        "pct": 100
+      },
+      "uncoveredFunctions": [],
+      "uncoveredBranches": [
+        "0",
+        "3",
+        "4"
+      ]
+    },
+    {
+      "file": "src/namespace.ts",
+      "statements": {
+        "covered": 8,
+        "total": 8,
+        "pct": 100
+      },
+      "branches": {
+        "covered": 4,
+        "total": 4,
+        "pct": 100
+      },
+      "functions": {
+        "covered": 2,
+        "total": 2,
+        "pct": 100
+      },
+      "uncoveredFunctions": [],
+      "uncoveredBranches": [
+        "2"
+      ]
+    },
+    {
+      "file": "src/preamble.ts",
+      "statements": {
+        "covered": 19,
+        "total": 19,
+        "pct": 100
+      },
+      "branches": {
+        "covered": 6,
+        "total": 6,
+        "pct": 100
+      },
+      "functions": {
+        "covered": 5,
+        "total": 5,
+        "pct": 100
+      },
+      "uncoveredFunctions": [],
+      "uncoveredBranches": []
+    },
+    {
+      "file": "src/seeds.ts",
+      "statements": {
+        "covered": 5,
+        "total": 5,
+        "pct": 100
+      },
+      "branches": {
+        "covered": 1,
+        "total": 1,
+        "pct": 100
+      },
+      "functions": {
+        "covered": 1,
+        "total": 1,
+        "pct": 100
+      },
+      "uncoveredFunctions": [],
+      "uncoveredBranches": []
+    },
+    {
+      "file": "src/state.ts",
+      "statements": {
+        "covered": 25,
+        "total": 26,
+        "pct": 96.15
+      },
+      "branches": {
+        "covered": 3,
+        "total": 3,
+        "pct": 100
+      },
+      "functions": {
+        "covered": 7,
+        "total": 7,
+        "pct": 100
+      },
+      "uncoveredFunctions": [],
+      "uncoveredBranches": []
+    },
+    {
+      "file": "src/tokens.ts",
+      "statements": {
+        "covered": 46,
+        "total": 49,
+        "pct": 93.88
+      },
+      "branches": {
+        "covered": 14,
+        "total": 14,
+        "pct": 100
+      },
+      "functions": {
+        "covered": 6,
+        "total": 6,
+        "pct": 100
+      },
+      "uncoveredFunctions": [],
+      "uncoveredBranches": [
+        "5",
+        "8",
+        "9",
+        "11",
+        "13"
+      ]
+    },
+    {
+      "file": "src/types.ts",
+      "statements": {
+        "covered": 0,
+        "total": 0,
+        "pct": 100
+      },
+      "branches": {
+        "covered": 0,
+        "total": 0,
+        "pct": 100
+      },
+      "functions": {
+        "covered": 0,
+        "total": 0,
+        "pct": 100
+      },
+      "uncoveredFunctions": [],
+      "uncoveredBranches": []
+    },
+    {
+      "file": "src/drivers/pricing.ts",
+      "statements": {
+        "covered": 10,
+        "total": 10,
+        "pct": 100
+      },
+      "branches": {
+        "covered": 3,
+        "total": 3,
+        "pct": 100
+      },
+      "functions": {
+        "covered": 1,
+        "total": 1,
+        "pct": 100
+      },
+      "uncoveredFunctions": [],
+      "uncoveredBranches": []
+    }
+  ]
+}
