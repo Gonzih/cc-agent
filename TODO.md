@@ -1,19 +1,16 @@
-# TODO — migrate cc-agent to @gonzih/cc-wire
+# TODO — unit tests for uncovered modules
 
 - [x] Write PLAN.md and TODO.md
-- [x] git checkout -b feat/cc-wire-migration
-- [x] Clone cc-wire, add deletedCronsKey + JOB_INDEX_GLOB + JOB_INDEX_PREFIX
-- [x] Bump cc-wire to 0.1.1, push, publish
-- [x] Add @gonzih/cc-wire to cc-agent package.json and npm install
-- [x] Migrate src/tokens.ts
-- [x] Migrate src/namespace.ts
-- [x] Migrate src/coordinator.ts
-- [x] Migrate src/meta-agent.ts
-- [x] Migrate src/cron.ts
-- [x] Migrate src/store.ts
-- [x] Migrate src/agent.ts
-- [x] Migrate src/swarm.ts
-- [x] Migrate src/index.ts
-- [x] npm test — 312 pass, 12 pre-existing redis.del mock failures
-- [ ] git diff --staged, commit, push, npm version patch, npm publish
+- [x] git checkout -b feat/unit-tests-coverage
+- [ ] Write src/evaluator.test.ts
+- [ ] Write src/preamble.test.ts
+- [ ] Write src/profiles.test.ts
+- [ ] Write src/redis.test.ts
+- [ ] Write src/drivers/__tests__/aider.test.ts
+- [ ] Write src/drivers/__tests__/gemini.test.ts
+- [ ] Write src/drivers/__tests__/amp.test.ts
+- [ ] Write src/drivers/__tests__/codex.test.ts
+- [ ] Write src/drivers/__tests__/drivers-index.test.ts
+- [ ] npm install && npm test — all pass
+- [ ] git diff --staged, commit, push
 - [ ] gh pr create + gh pr merge --squash --auto
