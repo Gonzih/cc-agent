@@ -1,10 +1,10 @@
-# TODO — write error-handling and edge-case tests
+# TODO — Write tests for uncovered branches
 
 - [x] Write PLAN.md and TODO.md
-- [x] git checkout -b feat/error-path-tests
-- [x] Extend src/swarm.test.ts (parseDecomposeResponse errors + buildSynthesisTask bounds)
-- [x] Extend src/tokens.test.ts (null Redis, zero tokens, comma-only CLAUDE_TOKENS)
-- [x] Extend src/namespace.test.ts (CWD="/", empty CC_AGENT_NAMESPACE)
-- [x] Create src/store-errors.test.ts (Redis failure → in-memory fallback)
-- [x] npm install && npm test — 369 passing, 12 pre-existing failures
-- [x] git diff --staged, commit, push, PR
+- [ ] git checkout -b feat/add-branch-tests
+- [ ] Write src/evaluator.test.ts
+- [ ] Extend src/swarm.test.ts
+- [ ] Extend src/store.test.ts
+- [ ] Extend src/coordinator.test.ts
+- [ ] npm install && npm test — verify all pass
+- [ ] git diff --staged, commit, push, gh pr create, gh pr merge
