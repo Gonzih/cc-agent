@@ -1,37 +1,35 @@
-# Plan: Comprehensive Test Coverage Report
+# Plan: Add test coverage for untested modules
 
 ## Task Restatement
-Scan the entire codebase and generate a comprehensive coverage report identifying all files,
-modules, functions, and branches lacking test coverage. Document findings in a structured
-format (JSON + CSV) with coverage percentages per file.
+Several modules in cc-agent have zero test coverage: evaluator.ts, profiles.ts,
+and four driver implementations (aider, gemini, amp, codex). The task is to write
+meaningful unit tests for these modules, commit them to branch feat/test-coverage,
+and push to remote.
 
 ## Approaches
 
-### Option A: Run vitest --coverage and parse the JSON output
-- Pro: exact numbers from the actual coverage tool (v8); includes per-function/branch data
-- Con: requires npm install first; slow if test suite is large
-- **Chosen** — ground-truth data beats any manual analysis
+### Option A: Integration tests hitting real binaries
+- Pro: maximally realistic
+- Con: requires binaries installed in CI, slow, brittle
 
-### Option B: Static analysis only (grep for untested functions)
-- Pro: fast, no runtime
-- Con: imprecise; misses branch-level coverage; false positives
+### Option B: Pure unit tests with mocked subprocess and storage
+- Pro: fast, hermetic, always reproducible, tests the logic we own
+- Con: doesn't catch CLI flag regressions
+- **Chosen** — consistent with existing test patterns in the repo
 
-### Option C: Combine A + B
-- Pro: richer report
-- Con: extra complexity; the v8 JSON report already has everything needed
+### Option C: Snapshot tests
+- Pro: easy to write
+- Con: brittle, doesn't validate correctness
 
-## Approach
-1. `npm install` to get vitest + coverage-v8
-2. `npm run test:coverage -- --reporter=verbose --coverage.reporter=json` to emit coverage/coverage-final.json
-3. Parse coverage-final.json → generate coverage-report.json (per-file summary) and coverage-report.csv
-4. Commit the reports to the branch and open a PR
-
-## Files to Touch
-- `coverage-report.json` (new — generated artifact)
-- `coverage-report.csv` (new — generated artifact)
-- `PLAN.md`, `TODO.md` (this session)
+## Files to create
+- `src/evaluator.test.ts` — tests for buildEvaluatorTask + all instruction builders
+- `src/profiles.test.ts` — tests for interpolate() + mocked profileStore wrappers
+- `src/drivers/__tests__/aider.test.ts` — AiderDriver spawn/events/estimateCost
+- `src/drivers/__tests__/gemini.test.ts` — GeminiDriver NDJSON parsing + events
+- `src/drivers/__tests__/amp.test.ts` — AmpDriver Claude-compatible NDJSON parsing
+- `src/drivers/__tests__/codex.test.ts` — CodexDriver plain-text output
 
 ## Risks
-- npm install may take time
-- Some source files may be excluded from coverage by tsconfig/vitest config
-- Test failures may prevent coverage from being generated (existing 12 failures are known)
+- child_process vi.mock hoisting: must use factory form vi.mock("child_process", () => ...)
+- fs mock: must preserve non-existsSync exports via importOriginal
+- profileStore mock: relative path must match profiles.ts import of ./store.js
