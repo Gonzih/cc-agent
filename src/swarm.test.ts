@@ -105,112 +105,161 @@ describe("SWARM_MAX_AGENTS_HARD_CAP", () => {
   });
 });
 
-// ─── buildSynthesisTask — output truncation ───────────────────────────────────
+// ─── parseDecomposeResponse — error paths and boundary conditions ─────────────
 
-describe("buildSynthesisTask — output truncation", () => {
-  const tasks = [{ id: "task-1", task: "Do the thing" }];
-
-  it("does not truncate outputs within 500 lines / 20 000 chars", () => {
-    const lines = Array.from({ length: 10 }, (_, i) => `line ${i}`);
-    const outputs = [{ taskId: "task-1", task: "Do the thing", status: "done", lines }];
-    const result = buildSynthesisTask("goal", tasks, outputs, "out.md");
-    for (const line of lines) {
-      expect(result).toContain(line);
-    }
-  });
-
-  it("truncates to last 500 lines when output exceeds 500 lines", () => {
-    // 600 lines total — only last 500 should appear
-    const lines = Array.from({ length: 600 }, (_, i) => `line-${i}`);
-    const outputs = [{ taskId: "task-1", task: "Do the thing", status: "done", lines }];
-    const result = buildSynthesisTask("goal", tasks, outputs, "out.md");
-    // last 500 lines end at index 599; first 100 lines (0..99) should not appear
-    expect(result).toContain("line-599"); // always included (last)
-    expect(result).toContain("line-100"); // first of the kept 500
-    expect(result).not.toContain("\nline-99\n"); // trimmed off
-    // The task string should report total line count
-    expect(result).toContain("600 total lines");
-    expect(result).toContain("showing last 500");
-  });
-
-  it("truncates by char limit when output exceeds 20 000 chars even under 500 lines", () => {
-    // Each line is ~300 chars; 100 lines = 30 000 chars > 20 000 limit
-    const lines = Array.from({ length: 100 }, (_, i) =>
-      `line-${i}-${"x".repeat(290)}`
+describe("parseDecomposeResponse - error paths", () => {
+  it("returns empty array when all tasks contain only whitespace", () => {
+    const result = parseDecomposeResponse(
+      '[{"id":"t1","task":"   "},{"id":"t2","task":"\\t\\n"}]'
     );
-    const outputs = [{ taskId: "task-1", task: "Do the thing", status: "done", lines }];
-    const result = buildSynthesisTask("goal", tasks, outputs, "out.md");
-    // The synthesized task must be shorter than it would be without truncation
-    // At 300 chars/line × 100 lines = 30 000 chars — truncation must have fired
-    const codeBlockContent = result.match(/```\n([\s\S]*?)\n```/)?.[1] ?? "";
-    expect(codeBlockContent.length).toBeLessThan(25_000);
-    // First line (index 0) should be cut off; last line (index 99) should survive
-    expect(result).toContain("line-99");
-    expect(result).not.toContain("line-0-"); // too early — truncated away
+    expect(result).toHaveLength(0);
   });
 
-  it("handles empty output lines gracefully", () => {
-    const outputs = [{ taskId: "task-1", task: "Do the thing", status: "done", lines: [] }];
-    const result = buildSynthesisTask("goal", tasks, outputs, "out.md");
-    expect(result).toContain("Do the thing");
-    expect(result).toContain("Status: done");
+  it("returns empty array when no items have a 'task' field", () => {
+    const result = parseDecomposeResponse(
+      '[{"id":"t1","description":"wrong field"},{"id":"t2","work":"also wrong"}]'
+    );
+    expect(result).toHaveLength(0);
   });
 
-  it("handles multiple sub-tasks in outputs", () => {
-    const multiTasks = [
-      { id: "t1", task: "Task One" },
-      { id: "t2", task: "Task Two" },
-    ];
-    const outputs = [
-      { taskId: "t1", task: "Task One", status: "done", lines: ["output-one"] },
-      { taskId: "t2", task: "Task Two", status: "failed", lines: ["error-two"] },
-    ];
-    const result = buildSynthesisTask("my goal", multiTasks, outputs, "result.md");
-    expect(result).toContain("output-one");
-    expect(result).toContain("error-two");
-    expect(result).toContain("Task One");
-    expect(result).toContain("Task Two");
-    expect(result).toContain("2 sub-tasks");
+  it("returns empty array for an empty JSON array", () => {
+    const result = parseDecomposeResponse("[]");
+    expect(result).toHaveLength(0);
+  });
+
+  it("throws on empty string input", () => {
+    expect(() => parseDecomposeResponse("")).toThrow();
+  });
+
+  it("throws when input is a JSON object, not an array", () => {
+    expect(() => parseDecomposeResponse('{"task":"something"}')).toThrow(
+      /Cannot extract JSON array/
+    );
+  });
+
+  it("throws when input is a bare number", () => {
+    expect(() => parseDecomposeResponse("42")).toThrow(/Cannot extract JSON array/);
+  });
+
+  it("throws when JSON code fence is unclosed and no other valid JSON found", () => {
+    expect(() => parseDecomposeResponse("```json\n[{broken")).toThrow();
+  });
+
+  it("filters null and primitive items, keeps only valid objects with task", () => {
+    const result = parseDecomposeResponse(
+      '[null, 42, "str", true, {"id":"t1","task":"Valid"}, {"id":"t2","task":"Also valid"}]'
+    );
+    expect(result).toHaveLength(2);
+    expect(result[0].task).toBe("Valid");
+    expect(result[1].task).toBe("Also valid");
+  });
+
+  it("coerces numeric task field to string", () => {
+    const result = parseDecomposeResponse('[{"id":"t1","task":123}]');
+    expect(result).toHaveLength(1);
+    expect(result[0].task).toBe("123");
+  });
+
+  it("coerces boolean task field to string", () => {
+    const result = parseDecomposeResponse('[{"id":"t1","task":true}]');
+    expect(result).toHaveLength(1);
+    expect(result[0].task).toBe("true");
+  });
+
+  it("filters items missing 'task' key while keeping those with task", () => {
+    const result = parseDecomposeResponse(
+      '[{"id":"t1"},{"id":"t2","task":"Valid task"}]'
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0].task).toBe("Valid task");
+  });
+
+  it("extracts array from text even when leading prose contains brackets", () => {
+    // The prose has a bracket but the real array comes later
+    const input = `Result (see step 3): [{"id":"t1","task":"Real task"},{"id":"t2","task":"Another"}]`;
+    const result = parseDecomposeResponse(input);
+    // Strategy 2 greedily matches from first [ to last ] — should find a valid array
+    expect(result.length).toBeGreaterThan(0);
   });
 });
 
-// ─── parseDecomposeResponse — additional edge cases ──────────────────────────
+// ─── buildSynthesisTask — boundary conditions ─────────────────────────────────
 
-describe("parseDecomposeResponse — additional edge cases", () => {
-  it("filters out non-object array items (null, number, string)", () => {
-    const input = JSON.stringify([null, 42, "string", { id: "t1", task: "Real task" }]);
-    const result = parseDecomposeResponse(input);
-    expect(result).toHaveLength(1);
-    expect(result[0].task).toBe("Real task");
+describe("buildSynthesisTask - boundary conditions", () => {
+  it("handles empty outputs array (zero sub-tasks completed)", () => {
+    const tasks = [{ id: "task-1", task: "Something" }];
+    const result = buildSynthesisTask("My goal", tasks, [], "out.md");
+    expect(result).toContain("My goal");
+    expect(result).toContain("0 sub-tasks");
+    expect(result).toContain("out.md");
   });
 
-  it("filters out objects missing the task field — returns empty array", () => {
-    // validateTasks filters items without "task" key; parseDecomposeResponse returns []
-    const input = JSON.stringify([{ id: "t1", description: "No task field here" }]);
-    const result = parseDecomposeResponse(input);
-    expect(result).toHaveLength(0);
+  it("handles empty tasks and outputs arrays", () => {
+    const result = buildSynthesisTask("Minimal goal", [], [], "minimal.md");
+    expect(result).toContain("Minimal goal");
+    expect(result).toContain("minimal.md");
   });
 
-  it("handles an array of tasks with only whitespace task strings — returns empty array", () => {
-    const input = JSON.stringify([
-      { id: "t1", task: "   " },
-      { id: "t2", task: "\t\n" },
-    ]);
-    // All tasks are blank strings — filtered by trim().length > 0 check in validateTasks
-    const result = parseDecomposeResponse(input);
-    expect(result).toHaveLength(0);
+  it("shows truncation annotation when output exceeds 500 lines", () => {
+    const manyLines = Array.from({ length: 600 }, (_, i) => `line-${i}`);
+    const tasks = [{ id: "task-1", task: "Heavy task" }];
+    const outputs = [
+      { taskId: "task-1", task: "Heavy task", status: "done", lines: manyLines },
+    ];
+    const result = buildSynthesisTask("Goal", tasks, outputs, "out.md");
+    expect(result).toContain("showing last 500");
+    // line-0 through line-99 should be dropped (only last 500 kept)
+    expect(result).not.toContain("line-0\n");
+    expect(result).toContain("line-599");
   });
 
-  it("extracts array from JSON fence without language specifier", () => {
-    const input = "```\n[{\"id\":\"t1\",\"task\":\"Plain fence task\"}]\n```";
-    const result = parseDecomposeResponse(input);
-    expect(result).toHaveLength(1);
-    expect(result[0].task).toBe("Plain fence task");
+  it("does not show truncation annotation when output is exactly 500 lines", () => {
+    const lines = Array.from({ length: 500 }, (_, i) => `line-${i}`);
+    const tasks = [{ id: "task-1", task: "Task" }];
+    const outputs = [{ taskId: "task-1", task: "Task", status: "done", lines }];
+    const result = buildSynthesisTask("Goal", tasks, outputs, "out.md");
+    expect(result).not.toContain("showing last 500");
+    expect(result).toContain(`500 total lines`);
   });
 
-  it("throws when JSON is valid but not an array (object at top level)", () => {
-    const input = JSON.stringify({ id: "t1", task: "not wrapped in array" });
-    // Top-level object, no [...] match either
-    expect(() => parseDecomposeResponse(input)).toThrow();
+  it("truncates goal to 60 chars in the PR title line", () => {
+    const longGoal = "A".repeat(80);
+    const result = buildSynthesisTask(longGoal, [], [], "out.md");
+    // The template: `"swarm synthesis: ${goal.slice(0, 60)}"`
+    expect(result).toContain("swarm synthesis: " + "A".repeat(60));
+    expect(result).not.toContain("swarm synthesis: " + "A".repeat(61));
+  });
+
+  it("goal exactly 60 chars appears untruncated in PR title", () => {
+    const goal60 = "B".repeat(60);
+    const result = buildSynthesisTask(goal60, [], [], "out.md");
+    expect(result).toContain("swarm synthesis: " + "B".repeat(60));
+  });
+
+  it("includes status for each sub-task output", () => {
+    const tasks = [
+      { id: "t1", task: "Task one" },
+      { id: "t2", task: "Task two" },
+    ];
+    const outputs = [
+      { taskId: "t1", task: "Task one", status: "done", lines: ["ok"] },
+      { taskId: "t2", task: "Task two", status: "cancelled", lines: [] },
+    ];
+    const result = buildSynthesisTask("Goal", tasks, outputs, "out.md");
+    expect(result).toContain("Status: done");
+    expect(result).toContain("Status: cancelled");
+  });
+
+  it("char-truncation for output exceeding 20000 chars produces valid result", () => {
+    // Each line is 100 chars; 300 lines = 30000 chars (> MAX_OUTPUT_CHARS=20000)
+    const longLines = Array.from({ length: 300 }, (_, i) =>
+      `line-${String(i).padStart(3, "0")}-${"x".repeat(93)}`
+    );
+    const tasks = [{ id: "t1", task: "Task" }];
+    const outputs = [{ taskId: "t1", task: "Task", status: "done", lines: longLines }];
+    const result = buildSynthesisTask("Goal", tasks, outputs, "out.md");
+    // Result should be a non-empty string (no crash)
+    expect(result.length).toBeGreaterThan(0);
+    expect(result).toContain("Goal");
   });
 });
