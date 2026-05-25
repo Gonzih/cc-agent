@@ -23,6 +23,8 @@ vi.mock("./claude.js", async () => {
       setTimeout(() => emitter.emit("exit", 0), 50);
       return emitter;
     }),
+    // resolveClaude is used by ClaudeCodeDriver (via list_drivers → getDriverStatus)
+    resolveClaude: vi.fn(() => "claude"),
   };
 });
 
@@ -599,6 +601,454 @@ describe("MCP server handlers", () => {
       params: { name: "search_jobs", arguments: {} },
     });
     const data = JSON.parse(result.content[0].text);
+    expect(data.error).toBeDefined();
+  });
+
+  // ─── Profile management tools ─────────────────────────────────────────────
+
+  it("create_profile with valid name returns ok:true", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: {
+        name: "create_profile",
+        arguments: {
+          name: "test-profile",
+          repo_url: "https://github.com/gonzih/repo.git",
+          task_template: "Run {{action}}",
+        },
+      },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(data.ok).toBe(true);
+    expect(data.message).toMatch(/test-profile/);
+  });
+
+  it("create_profile with invalid name (spaces) returns error", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: {
+        name: "create_profile",
+        arguments: {
+          name: "invalid name with spaces",
+          repo_url: "https://github.com/gonzih/repo.git",
+          task_template: "Do something",
+        },
+      },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(data.error).toBeDefined();
+    expect(data.error).toMatch(/alphanumeric/i);
+  });
+
+  it("create_profile with invalid name (dots) returns error", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: {
+        name: "create_profile",
+        arguments: {
+          name: "bad.name",
+          repo_url: "https://github.com/gonzih/repo.git",
+          task_template: "Do something",
+        },
+      },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(data.error).toBeDefined();
+  });
+
+  it("list_profiles returns profiles array with total", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    // Create a profile first so the list is non-trivially populated
+    await handler({
+      params: {
+        name: "create_profile",
+        arguments: {
+          name: "list-test-profile",
+          repo_url: "https://github.com/gonzih/repo.git",
+          task_template: "task",
+        },
+      },
+    });
+
+    const result = await handler({
+      params: { name: "list_profiles", arguments: {} },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(Array.isArray(data.profiles)).toBe(true);
+    expect(typeof data.total).toBe("number");
+    expect(data.total).toBeGreaterThanOrEqual(0);
+    // The profile we just created must appear
+    const names = data.profiles.map((p: { name: string }) => p.name);
+    expect(names).toContain("list-test-profile");
+  });
+
+  it("list_profiles returns objects with name and repoUrl", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    await handler({
+      params: {
+        name: "create_profile",
+        arguments: {
+          name: "shape-check-profile",
+          repo_url: "https://github.com/gonzih/repo.git",
+          task_template: "task",
+        },
+      },
+    });
+    const result = await handler({
+      params: { name: "list_profiles", arguments: {} },
+    });
+    const data = JSON.parse(result.content[0].text);
+    const profile = data.profiles.find((p: { name: string }) => p.name === "shape-check-profile");
+    expect(profile).toBeDefined();
+    expect(typeof profile.repoUrl).toBe("string");
+    expect(typeof profile.builtin).toBe("boolean");
+  });
+
+  it("delete_profile returns ok for existing profile", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    await handler({
+      params: {
+        name: "create_profile",
+        arguments: {
+          name: "to-be-deleted-profile",
+          repo_url: "https://github.com/gonzih/repo.git",
+          task_template: "task",
+        },
+      },
+    });
+
+    const result = await handler({
+      params: { name: "delete_profile", arguments: { name: "to-be-deleted-profile" } },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(data.ok).toBe(true);
+  });
+
+  it("delete_profile returns error for non-existent profile", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: { name: "delete_profile", arguments: { name: "no-such-profile-xyz-abc" } },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(data.error).toBeDefined();
+    expect(data.error).toMatch(/not found/i);
+  });
+
+  it("spawn_from_profile with unknown profile returns error", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: {
+        name: "spawn_from_profile",
+        arguments: { profile_name: "nonexistent-profile-xyz" },
+      },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(data.error).toBeDefined();
+    expect(data.error).toMatch(/not found/i);
+  });
+
+  it("spawn_from_profile with existing profile spawns a job", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    // Create the profile first
+    await handler({
+      params: {
+        name: "create_profile",
+        arguments: {
+          name: "spawn-profile-test",
+          repo_url: "https://github.com/gonzih/repo.git",
+          task_template: "Do the thing",
+        },
+      },
+    });
+
+    const result = await handler({
+      params: {
+        name: "spawn_from_profile",
+        arguments: { profile_name: "spawn-profile-test" },
+      },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(typeof data.job_id).toBe("string");
+    expect(data.status).toBe("started");
+    expect(data.profile).toBe("spawn-profile-test");
+  });
+
+  // ─── Cron management tools ─────────────────────────────────────────────────
+
+  it("list_crons returns crons array with total", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: { name: "list_crons", arguments: {} },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(Array.isArray(data.crons)).toBe(true);
+    expect(typeof data.total).toBe("number");
+  });
+
+  it("create_cron returns a cron object with id and schedule", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: {
+        name: "create_cron",
+        arguments: {
+          schedule: "0 * * * *",
+          interval_ms: 3600000,
+          prompt: "Run nightly checks",
+        },
+      },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(typeof data.id).toBe("string");
+    expect(data.schedule).toBe("0 * * * *");
+  });
+
+  it("created cron appears in list_crons", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const createResult = await handler({
+      params: {
+        name: "create_cron",
+        arguments: {
+          schedule: "30 6 * * *",
+          interval_ms: 86400000,
+          prompt: "Daily standup",
+        },
+      },
+    });
+    const created = JSON.parse(createResult.content[0].text);
+    const cronId = created.id;
+
+    const listResult = await handler({
+      params: { name: "list_crons", arguments: {} },
+    });
+    const listData = JSON.parse(listResult.content[0].text);
+    const ids = listData.crons.map((c: { id: string }) => c.id);
+    expect(ids).toContain(cronId);
+  });
+
+  it("delete_cron returns deleted:true for existing cron", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const createResult = await handler({
+      params: {
+        name: "create_cron",
+        arguments: {
+          schedule: "0 0 * * *",
+          interval_ms: 86400000,
+          prompt: "Midnight task",
+        },
+      },
+    });
+    const { id } = JSON.parse(createResult.content[0].text);
+
+    const deleteResult = await handler({
+      params: { name: "delete_cron", arguments: { cron_id: id } },
+    });
+    const data = JSON.parse(deleteResult.content[0].text);
+    expect(data.deleted).toBe(true);
+    expect(data.cron_id).toBe(id);
+  });
+
+  it("delete_cron returns deleted:false for unknown cron", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: { name: "delete_cron", arguments: { cron_id: "nonexistent-cron-xyz" } },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(data.deleted).toBe(false);
+  });
+
+  it("update_cron changes prompt on an existing cron", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const createResult = await handler({
+      params: {
+        name: "create_cron",
+        arguments: {
+          schedule: "0 12 * * *",
+          interval_ms: 86400000,
+          prompt: "Original prompt",
+        },
+      },
+    });
+    const { id } = JSON.parse(createResult.content[0].text);
+
+    const updateResult = await handler({
+      params: {
+        name: "update_cron",
+        arguments: { cron_id: id, prompt: "Updated prompt" },
+      },
+    });
+    const data = JSON.parse(updateResult.content[0].text);
+    expect(data.prompt).toBe("Updated prompt");
+    expect(data.id).toBe(id);
+  });
+
+  it("update_cron with unknown id returns error object", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: {
+        name: "update_cron",
+        arguments: { cron_id: "ghost-cron-id", prompt: "New prompt" },
+      },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(data.error).toBeDefined();
+  });
+
+  // ─── Infrastructure / status tools ────────────────────────────────────────
+
+  it("list_token_status returns token list with current and total", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: { name: "list_token_status", arguments: {} },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(Array.isArray(data.tokens)).toBe(true);
+    expect(typeof data.total).toBe("number");
+    expect(typeof data.current).toBe("number");
+    expect(typeof data.allExhausted).toBe("boolean");
+  });
+
+  it("list_notifications returns messages array and namespace", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: { name: "list_notifications", arguments: {} },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(Array.isArray(data.messages)).toBe(true);
+    expect(typeof data.total).toBe("number");
+    expect(typeof data.namespace).toBe("string");
+  });
+
+  it("list_drivers returns valid_names array and usage hint", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: { name: "list_drivers", arguments: {} },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(Array.isArray(data.valid_names)).toBe(true);
+    expect(data.valid_names.length).toBeGreaterThan(0);
+    expect(data.valid_names).toContain("claude");
+    expect(typeof data.usage).toBe("string");
+  });
+
+  it("docker_ps returns containers array with total", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: { name: "docker_ps", arguments: {} },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(Array.isArray(data.containers)).toBe(true);
+    expect(typeof data.total).toBe("number");
+  });
+
+  it("list_meta_agents returns agents array with total", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: { name: "list_meta_agents", arguments: {} },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(Array.isArray(data.agents)).toBe(true);
+    expect(typeof data.total).toBe("number");
+  });
+
+  it("get_swarm_status with unknown swarm_id returns error", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: { name: "get_swarm_status", arguments: { swarm_id: "nonexistent-swarm-xyz" } },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(data.error).toBeDefined();
+    expect(data.error).toMatch(/not found/i);
+  });
+
+  it("wait_for_job with unknown job_id returns error", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: {
+        name: "wait_for_job",
+        arguments: { job_id: "nonexistent-job-xyz", timeout_seconds: 1 },
+      },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(data.error).toBeDefined();
+    expect(data.error).toMatch(/not found/i);
+  });
+
+  it("wait_for_job returns timed_out:true when job stays non-terminal within timeout", async () => {
+    // wait_for_job polls jobStore (not manager's in-memory jobs) — tests verify
+    // the timeout/timed_out field is set correctly when the job doesn't finish.
+    // The job itself is created (status "pending") then wait is called with 0s timeout.
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+
+    // Spawn a job — it appears in manager immediately but persists to jobStore async.
+    // Save a record directly to jobStore so wait_for_job finds it.
+    const { jobStore } = await import("./store.js");
+    const pendingJobId = "wait-test-" + Math.random().toString(36).slice(2);
+    await jobStore.saveJob({
+      id: pendingJobId,
+      status: "pending",
+      repoUrl: "https://github.com/gonzih/repo.git",
+      task: "wait timeout test",
+      recentTools: [],
+      outputLineCount: 0,
+    });
+
+    const waitResult = await handler({
+      params: {
+        name: "wait_for_job",
+        arguments: { job_id: pendingJobId, timeout_seconds: 0 },
+      },
+    });
+    const data = JSON.parse(waitResult.content[0].text);
+    expect(data.job_id).toBe(pendingJobId);
+    // Job is still "pending", deadline is already past → timed_out must be true
+    expect(data.timed_out).toBe(true);
+  });
+
+  it("list_tools includes all profile, cron, and meta-agent tools", async () => {
+    const handler = capturedHandlers.get(ListToolsRequestSchema)!;
+    const result = await handler({});
+    const names = result.tools.map((t: { name: string }) => t.name);
+    expect(names).toContain("create_profile");
+    expect(names).toContain("list_profiles");
+    expect(names).toContain("delete_profile");
+    expect(names).toContain("spawn_from_profile");
+    expect(names).toContain("list_crons");
+    expect(names).toContain("create_cron");
+    expect(names).toContain("update_cron");
+    expect(names).toContain("delete_cron");
+    expect(names).toContain("list_meta_agents");
+    expect(names).toContain("start_meta_agent");
+    expect(names).toContain("stop_meta_agent");
+    expect(names).toContain("message_meta_agent");
+    expect(names).toContain("docker_ps");
+    expect(names).toContain("list_token_status");
+    expect(names).toContain("list_notifications");
+    expect(names).toContain("list_drivers");
+    expect(names).toContain("get_swarm_status");
+    expect(names).toContain("swarm_task");
+    expect(names).toContain("wait_for_job");
+  });
+
+  it("get_logs returns lines array and total", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: { name: "get_logs", arguments: { lines: 10 } },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(Array.isArray(data.lines)).toBe(true);
+    expect(typeof data.total).toBe("number");
+  });
+
+  it("send_message to unknown job returns sent:false with error", async () => {
+    const handler = capturedHandlers.get(CallToolRequestSchema)!;
+    const result = await handler({
+      params: {
+        name: "send_message",
+        arguments: { job_id: "ghost-job-id", message: "hello agent" },
+      },
+    });
+    const data = JSON.parse(result.content[0].text);
+    expect(data.sent).toBe(false);
     expect(data.error).toBeDefined();
   });
 });

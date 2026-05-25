@@ -1,6 +1,11 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { JobStore, LearningsStore, ProfileStore, PlanStore } from "./store.js";
 import type { JobRecord, Profile, PlanRecord } from "./store.js";
+import { describe, it, expect, afterEach, beforeAll } from "vitest";
+import { JobStore, LearningsStore, ProfileStore, PlanStore } from "./store.js";
+import type { JobRecord, Profile, PlanRecord } from "./store.js";
+import { initRedis, getRedis } from "./redis.js";
+import { randomUUID } from "crypto";
 
 // Restore namespace env vars after each test (test-setup.ts flushes Redis DB)
 afterEach(() => {
@@ -212,6 +217,85 @@ describe("JobStore.loadAll", () => {
     expect(job).toBeDefined();
     expect(Array.isArray(job?.recentTools)).toBe(true);
     expect(typeof job?.outputLineCount).toBe("number");
+// ─── JobStore — output and update paths ──────────────────────────────────────
+//
+// Use randomUUID() for job IDs so disk log files don't accumulate across
+// test runs (appendLog writes to ~/.cc-agent/jobs/{id}.log on disk).
+
+describe("JobStore — appendOutput / getOutput", () => {
+  function makeJob(overrides: Partial<JobRecord> = {}): JobRecord {
+    return {
+      id: randomUUID(),          // unique per test run to avoid disk state pollution
+      status: "running",
+      repoUrl: "https://github.com/test/repo.git",
+      task: "test task",
+      recentTools: [],
+      outputLineCount: 0,
+      ...overrides,
+    };
+  }
+
+  it("appendOutput and getOutput round-trip (offset=0)", async () => {
+    const store = new JobStore();
+    const job = makeJob();
+    await store.saveJob(job);
+
+    await store.appendOutput(job.id, "line A");
+    await store.appendOutput(job.id, "line B");
+    await store.appendOutput(job.id, "line C");
+
+    const lines = await store.getOutput(job.id, 0);
+    expect(lines).toEqual(["line A", "line B", "line C"]);
+  });
+
+  it("getOutput with offset returns only lines after the offset", async () => {
+    const store = new JobStore();
+    const job = makeJob();
+    await store.saveJob(job);
+
+    for (const l of ["l0", "l1", "l2", "l3"]) {
+      await store.appendOutput(job.id, l);
+    }
+
+    const tail = await store.getOutput(job.id, 2);
+    expect(tail).toEqual(["l2", "l3"]);
+  });
+
+  it("getOutput from unknown job returns empty array", async () => {
+    const store = new JobStore();
+    const lines = await store.getOutput(`no-such-job-${randomUUID()}`, 0);
+    expect(Array.isArray(lines)).toBe(true);
+    expect(lines.length).toBe(0);
+  });
+
+  it("updateJob merges partial fields without losing others", async () => {
+    const store = new JobStore();
+    const job = makeJob();
+    await store.saveJob(job);
+
+    await store.updateJob(job.id, { status: "done", exitCode: 0 });
+    const updated = await store.getJob(job.id);
+
+    expect(updated?.status).toBe("done");
+    expect(updated?.exitCode).toBe(0);
+    // Original fields are preserved
+    expect(updated?.repoUrl).toBe(job.repoUrl);
+    expect(updated?.task).toBe(job.task);
+  });
+
+  it("updateJob on a non-existent id is a no-op (no error thrown)", async () => {
+    const store = new JobStore();
+    await expect(store.updateJob(`ghost-${randomUUID()}`, { status: "done" })).resolves.not.toThrow();
+  });
+
+  it("saveJob then getJob returns the saved record", async () => {
+    const store = new JobStore();
+    const job = makeJob();
+    await store.saveJob(job);
+
+    const found = await store.getJob(job.id);
+    expect(found?.id).toBe(job.id);
+    expect(found?.status).toBe("running");
   });
 });
 
@@ -230,6 +314,16 @@ describe("ProfileStore", () => {
   afterEach(() => {
     delete process.env.CC_AGENT_NAMESPACE;
   });
+describe("ProfileStore", () => {
+  function makeProfile(name: string, extra: Partial<Profile> = {}): Profile {
+    return {
+      name,
+      repoUrl: "https://github.com/example/repo.git",
+      taskTemplate: "Run {{action}}",
+      createdAt: new Date().toISOString(),
+      ...extra,
+    };
+  }
 
   it("saveProfile and getProfile round-trip", async () => {
     const store = new ProfileStore();
@@ -245,6 +339,26 @@ describe("ProfileStore", () => {
     const store = new ProfileStore();
     const got = await store.getProfile("does-not-exist");
     expect(got).toBeNull();
+
+    const found = await store.getProfile("my-profile");
+    expect(found).not.toBeNull();
+    expect(found?.name).toBe("my-profile");
+    expect(found?.repoUrl).toBe("https://github.com/example/repo.git");
+  });
+
+  it("getProfile returns null for unknown name", async () => {
+    const store = new ProfileStore();
+    const found = await store.getProfile("profile-that-does-not-exist");
+    expect(found).toBeNull();
+  });
+
+  it("saveProfile overwrites existing profile with same name", async () => {
+    const store = new ProfileStore();
+    await store.saveProfile(makeProfile("overwrite-me", { taskTemplate: "first" }));
+    await store.saveProfile(makeProfile("overwrite-me", { taskTemplate: "second" }));
+
+    const found = await store.getProfile("overwrite-me");
+    expect(found?.taskTemplate).toBe("second");
   });
 
   it("listProfiles returns all saved profiles", async () => {
@@ -266,6 +380,16 @@ describe("ProfileStore", () => {
   });
 
   it("deleteProfile removes a saved profile and returns true", async () => {
+    await store.saveProfile(makeProfile("list-prof-a"));
+    await store.saveProfile(makeProfile("list-prof-b"));
+
+    const profiles = await store.listProfiles();
+    const names = profiles.map((p) => p.name);
+    expect(names).toContain("list-prof-a");
+    expect(names).toContain("list-prof-b");
+  });
+
+  it("deleteProfile returns true for an existing profile", async () => {
     const store = new ProfileStore();
     await store.saveProfile(makeProfile("delete-me"));
     const deleted = await store.deleteProfile("delete-me");
@@ -288,6 +412,46 @@ describe("ProfileStore", () => {
     const profiles = await store.listProfiles();
     expect(profiles.map((p) => p.name)).toContain("keep-me");
     expect(profiles.map((p) => p.name)).not.toContain("remove-me");
+    const deleted = await store.deleteProfile("no-such-profile-xyz");
+    expect(deleted).toBe(false);
+  });
+
+  it("deleted profile is not returned by getProfile", async () => {
+    const store = new ProfileStore();
+    await store.saveProfile(makeProfile("ephemeral-p"));
+    await store.deleteProfile("ephemeral-p");
+
+    const found = await store.getProfile("ephemeral-p");
+    expect(found).toBeNull();
+  });
+
+  it("deleted profile is not returned by listProfiles", async () => {
+    const store = new ProfileStore();
+    await store.saveProfile(makeProfile("will-be-gone"));
+    await store.deleteProfile("will-be-gone");
+
+    const profiles = await store.listProfiles();
+    expect(profiles.some((p) => p.name === "will-be-gone")).toBe(false);
+  });
+
+  it("deleteProfile of already-deleted profile returns false", async () => {
+    const store = new ProfileStore();
+    await store.saveProfile(makeProfile("once-only"));
+    await store.deleteProfile("once-only");
+    const secondDelete = await store.deleteProfile("once-only");
+    expect(secondDelete).toBe(false);
+  });
+
+  it("stores optional fields (description, defaultBudgetUsd)", async () => {
+    const store = new ProfileStore();
+    await store.saveProfile(makeProfile("with-extras", {
+      description: "A test profile",
+      defaultBudgetUsd: 5.0,
+    }));
+
+    const found = await store.getProfile("with-extras");
+    expect(found?.description).toBe("A test profile");
+    expect(found?.defaultBudgetUsd).toBe(5.0);
   });
 });
 
@@ -376,5 +540,88 @@ describe("PlanStore — mocked Redis round-trip", () => {
     const exIdx = callArgs.indexOf("EX");
     expect(typeof callArgs[exIdx + 1]).toBe("number");
     expect(callArgs[exIdx + 1] as number).toBeGreaterThan(0);
+//
+// PlanStore is Redis-only (no in-memory or disk fallback — plans are
+// intentionally best-effort metadata). Round-trip tests are skipped when
+// Redis is unavailable; the no-op / null-return behavior is always tested.
+
+describe("PlanStore", () => {
+  // PlanStore is Redis-only (no in-memory or disk fallback).
+  // Round-trip tests are skipped at runtime when Redis is unavailable.
+
+  beforeAll(async () => {
+    await initRedis().catch(() => {});
+  });
+
+  const redisReady = () => !!getRedis();
+
+  function makePlan(id: string): PlanRecord {
+    return {
+      id,
+      goal: "Deploy the service",
+      steps: [
+        { stepId: "s1", jobId: "job-111", status: "done" },
+        { stepId: "s2", jobId: "job-222", status: "pending" },
+      ],
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  it("getPlan returns null for unknown id regardless of Redis state", async () => {
+    const store = new PlanStore();
+    const found = await store.getPlan("plan-that-does-not-exist-xyz");
+    expect(found).toBeNull();
+  });
+
+  it("savePlan does not throw even when Redis is unavailable (best-effort)", async () => {
+    const store = new PlanStore();
+    await expect(store.savePlan(makePlan("no-throw-test"))).resolves.not.toThrow();
+  });
+
+  it("savePlan and getPlan round-trip (requires Redis)", async () => {
+    if (!redisReady()) return; // skip: PlanStore has no in-memory fallback
+    const store = new PlanStore();
+    const plan = makePlan("plan-round-trip");
+    await store.savePlan(plan);
+
+    const found = await store.getPlan("plan-round-trip");
+    expect(found).not.toBeNull();
+    expect(found?.id).toBe("plan-round-trip");
+    expect(found?.goal).toBe("Deploy the service");
+  });
+
+  it("savePlan persists the steps array (requires Redis)", async () => {
+    if (!redisReady()) return;
+    const store = new PlanStore();
+    const plan = makePlan("plan-with-steps");
+    await store.savePlan(plan);
+
+    const found = await store.getPlan("plan-with-steps");
+    expect(found?.steps).toHaveLength(2);
+    expect(found?.steps[0].stepId).toBe("s1");
+    expect(found?.steps[1].jobId).toBe("job-222");
+  });
+
+  it("savePlan overwrites an existing plan with the same id (requires Redis)", async () => {
+    if (!redisReady()) return;
+    const store = new PlanStore();
+    await store.savePlan({ ...makePlan("plan-overwrite"), goal: "first goal" });
+    await store.savePlan({ ...makePlan("plan-overwrite"), goal: "second goal" });
+
+    const found = await store.getPlan("plan-overwrite");
+    expect(found?.goal).toBe("second goal");
+  });
+
+  it("multiple distinct plans are retrievable independently (requires Redis)", async () => {
+    if (!redisReady()) return;
+    const store = new PlanStore();
+    await store.savePlan(makePlan("plan-x"));
+    await store.savePlan(makePlan("plan-y"));
+
+    const x = await store.getPlan("plan-x");
+    const y = await store.getPlan("plan-y");
+
+    expect(x?.id).toBe("plan-x");
+    expect(y?.id).toBe("plan-y");
   });
 });
