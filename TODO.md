@@ -1,9 +1,13 @@
-# TODO — Comprehensive Coverage Report
+# TODO — feat/test-coverage
 
-- [x] Write PLAN.md and TODO.md
-- [x] npm install (get vitest + coverage-v8)
-- [x] npm run test:coverage (emit coverage/coverage-final.json)
-- [x] Parse coverage-final.json → coverage-report.json + coverage-report.csv
-- [ ] git checkout -b feat/coverage-report
-- [ ] Commit reports + PLAN.md + TODO.md
-- [ ] git push + gh pr create + gh pr merge --squash --auto
+- [ ] Write PLAN.md and TODO.md
+- [ ] git checkout -b feat/test-coverage
+- [ ] Write src/evaluator.test.ts
+- [ ] Write src/profiles.test.ts
+- [ ] Write src/drivers/__tests__/aider.test.ts
+- [ ] Write src/drivers/__tests__/gemini.test.ts
+- [ ] Write src/drivers/__tests__/amp.test.ts
+- [ ] Write src/drivers/__tests__/codex.test.ts
+- [ ] npm install && npm test — verify new tests pass
+- [ ] git add + commit + push
+- [ ] gh pr create + gh pr merge --squash --auto
