@@ -1,51 +1,37 @@
-# Plan: Migrate cc-agent off hardcoded Redis channel strings onto @gonzih/cc-wire
+# Plan: Comprehensive Test Coverage Report
 
 ## Task Restatement
-Every Redis key/channel string with the `cca:` prefix is currently hardcoded in cc-agent
-source files. We need to replace them all with imports from `@gonzih/cc-wire`, which is
-the single source of truth for Redis key patterns across the cc-* suite. This is a pure
-string-constant refactor — zero behavior change.
+Scan the entire codebase and generate a comprehensive coverage report identifying all files,
+modules, functions, and branches lacking test coverage. Document findings in a structured
+format (JSON + CSV) with coverage percentages per file.
 
 ## Approaches
 
-### Option A: Global search-replace with sed
-- Pro: fast for simple patterns
-- Con: brittle for template literals, misses import wiring, hard to verify
+### Option A: Run vitest --coverage and parse the JSON output
+- Pro: exact numbers from the actual coverage tool (v8); includes per-function/branch data
+- Con: requires npm install first; slow if test suite is large
+- **Chosen** — ground-truth data beats any manual analysis
 
-### Option B: File-by-file manual edit with full import wiring
-- Pro: each file's intent stays clear; imports grouped sensibly; easy to review per-file
-- Con: more edits, but this is necessary for correctness
+### Option B: Static analysis only (grep for untested functions)
+- Pro: fast, no runtime
+- Con: imprecise; misses branch-level coverage; false positives
 
-### Option C: Code-gen / AST transform
-- Pro: systematic
-- Con: overkill, no AST tool available, manual is fast enough given clear grep output
+### Option C: Combine A + B
+- Pro: richer report
+- Con: extra complexity; the v8 JSON report already has everything needed
 
-**Chosen: Option B** — file-by-file manual edit with full import wiring.
+## Approach
+1. `npm install` to get vitest + coverage-v8
+2. `npm run test:coverage -- --reporter=verbose --coverage.reporter=json` to emit coverage/coverage-final.json
+3. Parse coverage-final.json → generate coverage-report.json (per-file summary) and coverage-report.csv
+4. Commit the reports to the branch and open a PR
 
-## Missing from cc-wire 0.1.0
-- `deletedCronsKey(namespace)` → `cca:deleted-crons:${namespace}` (used in cron.ts)
-- `JOB_INDEX_GLOB = "cca:jobs:*"` (used in index.ts redis.keys call)
-- `JOB_INDEX_PREFIX = "cca:jobs:"` (used in index.ts key.replace call)
-
-These must be added to cc-wire first, version bumped to 0.1.1, and published.
-
-## Files to Touch in cc-agent
-- `src/tokens.ts` — remove `TOKEN_INDEX_KEY`, import from cc-wire
-- `src/namespace.ts` — remove local `jobIndexKey` impl, import from cc-wire
-- `src/coordinator.ts` — remove `STREAM_KEY`, `COORDINATOR_GROUP`, import from cc-wire
-- `src/meta-agent.ts` — remove `META_AGENTS_INDEX` + 5 private key builders, import from cc-wire
-- `src/cron.ts` — remove `redisKey()` / `deletedKey()` methods, import from cc-wire
-- `src/store.ts` — replace all `cca:job:`, `cca:profile:`, `cca:plan:`, `cca:learnings:`, `cca:profiles:index`
-- `src/agent.ts` — replace `cca:job:*:output`, `cca:coordinator:plan:*`, `cca:event-stream`, `cca:job:done:*`, signal/input keys
-- `src/swarm.ts` — replace `cca:swarm:*` and `cca:job:*`
-- `src/index.ts` — replace coordinator plan key, job done channels, notify channels, chat channels, version key, list_active_repos patterns
-
-## Not Migrating (out of scope)
-- `"cca:*"` pubsub wildcard in index.ts — general glob, not a specific channel
-- String literals inside description fields / text messages (not Redis calls)
-- Numeric TTL and CAP constants (not channel strings)
+## Files to Touch
+- `coverage-report.json` (new — generated artifact)
+- `coverage-report.csv` (new — generated artifact)
+- `PLAN.md`, `TODO.md` (this session)
 
 ## Risks
-- Import cycles: cc-wire has no runtime deps so no cycle risk
-- cc-wire publish may fail if npm creds unavailable — user would need to publish manually
-- One missing constant (`deletedCronsKey`) must land in cc-wire before cc-agent migration
+- npm install may take time
+- Some source files may be excluded from coverage by tsconfig/vitest config
+- Test failures may prevent coverage from being generated (existing 12 failures are known)
