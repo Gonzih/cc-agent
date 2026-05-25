@@ -17,6 +17,7 @@ const {
   mockRedisRpop,
   mockRedisLPush,
   mockRedisLTrim,
+  mockRedisDel,
 } = vi.hoisted(() => {
   const mockRedisGet = vi.fn(async () => null as string | null);
   const mockRedisSet = vi.fn(async () => "OK");
@@ -26,6 +27,7 @@ const {
   const mockRedisRpop = vi.fn(async () => null as string | null);
   const mockRedisLPush = vi.fn(async () => 1);  // ioredis: lpush
   const mockRedisLTrim = vi.fn(async () => "OK");  // ioredis: ltrim
+  const mockRedisDel = vi.fn(async () => 1);  // ioredis: del
 
   const mockRedis = {
     get: mockRedisGet,
@@ -36,6 +38,7 @@ const {
     rpop: mockRedisRpop,
     lpush: mockRedisLPush,
     ltrim: mockRedisLTrim,
+    del: mockRedisDel,
   };
 
   const mockGetRedis = vi.fn(() => mockRedis as typeof mockRedis | null);
@@ -73,6 +76,7 @@ const {
     mockRedisRpop,
     mockRedisLPush,
     mockRedisLTrim,
+    mockRedisDel,
   };
 });
 
@@ -113,6 +117,7 @@ function resetRedisMock() {
     rpop: mockRedisRpop,
     lpush: mockRedisLPush,
     ltrim: mockRedisLTrim,
+    del: mockRedisDel,
   };
   mockGetRedis.mockReturnValue(redisMock);
   return redisMock;
@@ -131,6 +136,7 @@ describe("MetaAgentManager", () => {
     mockRedisRpop.mockResolvedValue(null);
     mockRedisLPush.mockResolvedValue(1);
     mockRedisLTrim.mockResolvedValue("OK");
+    mockRedisDel.mockResolvedValue(1);
     resetRedisMock();
     manager = new MetaAgentManager();
   });
