@@ -1,10 +1,16 @@
-# TODO — Write tests for uncovered branches
+# TODO — unit tests for uncovered modules
 
 - [x] Write PLAN.md and TODO.md
-- [ ] git checkout -b feat/add-branch-tests
+- [x] git checkout -b feat/unit-tests-coverage
 - [ ] Write src/evaluator.test.ts
-- [ ] Extend src/swarm.test.ts
-- [ ] Extend src/store.test.ts
-- [ ] Extend src/coordinator.test.ts
-- [ ] npm install && npm test — verify all pass
-- [ ] git diff --staged, commit, push, gh pr create, gh pr merge
+- [ ] Write src/preamble.test.ts
+- [ ] Write src/profiles.test.ts
+- [ ] Write src/redis.test.ts
+- [ ] Write src/drivers/__tests__/aider.test.ts
+- [ ] Write src/drivers/__tests__/gemini.test.ts
+- [ ] Write src/drivers/__tests__/amp.test.ts
+- [ ] Write src/drivers/__tests__/codex.test.ts
+- [ ] Write src/drivers/__tests__/drivers-index.test.ts
+- [ ] npm install && npm test — all pass
+- [ ] git diff --staged, commit, push
+- [ ] gh pr create + gh pr merge --squash --auto
