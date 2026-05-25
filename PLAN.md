@@ -1,35 +1,31 @@
-# Plan: Add test coverage for untested modules
+# Plan: Write tests for uncovered error handling, edge cases, and validation logic
 
 ## Task Restatement
-Several modules in cc-agent have zero test coverage: evaluator.ts, profiles.ts,
-and four driver implementations (aider, gemini, amp, codex). The task is to write
-meaningful unit tests for these modules, commit them to branch feat/test-coverage,
-and push to remote.
+Add tests for error handling paths, exception scenarios, validation logic, and boundary
+conditions that are not currently covered by the test suite. Focus on actionable, specific
+gaps identified by code analysis — not hypothetical integration issues.
 
-## Approaches
+## Approach
+Extend existing test files and create one new test file with mocked Redis to cover
+Redis failure fallback paths:
 
-### Option A: Integration tests hitting real binaries
-- Pro: maximally realistic
-- Con: requires binaries installed in CI, slow, brittle
+1. `src/swarm.test.ts` — add `parseDecomposeResponse` error paths and `buildSynthesisTask`
+   boundary conditions (output truncation, empty inputs, type coercion)
+2. `src/tokens.test.ts` — add Redis-unavailable paths (null Redis), boundary inputs
+   (zero tokens, CLAUDE_TOKENS with internal commas)
+3. `src/namespace.test.ts` — add edge cases: CWD="/", empty CC_AGENT_NAMESPACE
+4. `src/store-errors.test.ts` (new) — mock Redis to test failure-to-in-memory fallback
+   for JobStore and LearningsStore
 
-### Option B: Pure unit tests with mocked subprocess and storage
-- Pro: fast, hermetic, always reproducible, tests the logic we own
-- Con: doesn't catch CLI flag regressions
-- **Chosen** — consistent with existing test patterns in the repo
-
-### Option C: Snapshot tests
-- Pro: easy to write
-- Con: brittle, doesn't validate correctness
-
-## Files to create
-- `src/evaluator.test.ts` — tests for buildEvaluatorTask + all instruction builders
-- `src/profiles.test.ts` — tests for interpolate() + mocked profileStore wrappers
-- `src/drivers/__tests__/aider.test.ts` — AiderDriver spawn/events/estimateCost
-- `src/drivers/__tests__/gemini.test.ts` — GeminiDriver NDJSON parsing + events
-- `src/drivers/__tests__/amp.test.ts` — AmpDriver Claude-compatible NDJSON parsing
-- `src/drivers/__tests__/codex.test.ts` — CodexDriver plain-text output
+## Files to Touch
+- `src/swarm.test.ts` — extend (pure function tests, no new mocks needed)
+- `src/tokens.test.ts` — extend (reuse existing hoisted `mockGetRedis`)
+- `src/namespace.test.ts` — extend (pure function, no mocks needed)
+- `src/store-errors.test.ts` — create (needs its own mock setup)
+- `PLAN.md`, `TODO.md` — update
 
 ## Risks
-- child_process vi.mock hoisting: must use factory form vi.mock("child_process", () => ...)
-- fs mock: must preserve non-existsSync exports via importOriginal
-- profileStore mock: relative path must match profiles.ts import of ./store.js
+- `vi.hoisted` mocks in tokens.test.ts must be reused, not redeclared
+- Store mock must mock `./state.js` to avoid file-system side effects
+- `parseDecomposeResponse` returns `[]` (not throws) for empty/filtered tasks — tests must
+  reflect actual behavior, not assumed behavior

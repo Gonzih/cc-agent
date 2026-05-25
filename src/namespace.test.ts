@@ -49,3 +49,41 @@ describe("jobIndexKey", () => {
     expect(jobIndexKey()).toBe("cca:jobs:default");
   });
 });
+
+// ─── getNamespace — edge cases ────────────────────────────────────────────────
+
+describe("getNamespace - edge cases", () => {
+  it("falls back to 'default' when CC_AGENT_NAMESPACE is empty string", () => {
+    // Empty string is falsy — should not be used as namespace
+    process.env.CC_AGENT_NAMESPACE = "";
+    process.env.CWD = "/home/user/my-project";
+    expect(getNamespace()).toBe("my-project");
+  });
+
+  it("falls back to 'default' when CWD is root '/'", () => {
+    // path.basename("/") returns "" which is falsy → falls back to "default"
+    process.env.CWD = "/";
+    expect(getNamespace()).toBe("default");
+  });
+
+  it("uses CC_AGENT_NAMESPACE even when CWD is also set to a valid path", () => {
+    process.env.CC_AGENT_NAMESPACE = "explicit-ns";
+    process.env.CWD = "/home/user/some-project";
+    expect(getNamespace()).toBe("explicit-ns");
+  });
+
+  it("handles CWD with a single path segment (no parent)", () => {
+    process.env.CWD = "myrepo";
+    expect(getNamespace()).toBe("myrepo");
+  });
+});
+
+describe("jobIndexKey - edge cases", () => {
+  it("builds key for 'default' namespace when nothing is set", () => {
+    expect(jobIndexKey("default")).toBe("cca:jobs:default");
+  });
+
+  it("accepts arbitrary namespace strings", () => {
+    expect(jobIndexKey("org-repo-name")).toBe("cca:jobs:org-repo-name");
+  });
+});
