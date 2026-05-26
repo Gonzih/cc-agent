@@ -1,16 +1,17 @@
-# Plan: Add `coder` builtin profile
+# Plan: Expose available profiles in MCP tool descriptions
 
 ## Task Restatement
-Add a new built-in profile named `coder` to `BUILTIN_PROFILES` in `src/seeds.ts`.
-The profile carries a `preamble` containing the Karpathy coding discipline guidelines.
-Also update `seedBuiltinProfiles` to overwrite existing builtin profiles (not just skip them).
-Verify `spawn_from_profile` already passes `preamble` through (it does — line 1197 of index.ts).
-`Profile.preamble` already exists in `src/store.ts` (line 250).
+Agents with cc-agent MCP access don't know profiles exist unless they happen to call `list_profiles`. Fix this by:
+1. Updating `list_profiles` tool description to clarify it should be called before `spawn_from_profile`
+2. Updating `spawn_from_profile` tool description to mention calling `list_profiles` first and listing built-in profiles
+3. Adding a "Profiles" section to the preamble injected into every agent
 
 ## Files to Touch
-- `src/seeds.ts` — add profile, fix seeding overwrite logic
-- `src/seeds.test.ts` — update count from 7→8, add overwrite test, add coder profile test
+- `src/index.ts` — update two tool descriptions (lines ~369, ~596)
+- `src/preamble.ts` — add profiles section to `getPreamble()`
 
-## Risks / Notes
-- Test at seeds.test.ts:30 hardcodes "7 built-in profiles" — must update to 8
-- Overwrite logic: only overwrite when `existing.builtin === true`; leave user-defined profiles alone
+## Approach
+Direct targeted edits to the three locations. No new abstractions needed — this is purely documentation/description text changes.
+
+## Risks / Unknowns
+- Built-in profile names must match what's actually in `src/seeds.ts` — verify before hardcoding

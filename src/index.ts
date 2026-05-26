@@ -366,7 +366,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "list_profiles",
-      description: "List all saved named job profiles.",
+      description: "List all saved named job profiles, including built-in profiles. Call this before spawn_from_profile to discover what profiles are available.",
       inputSchema: { type: "object", properties: {} },
     },
     {
@@ -593,7 +593,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "spawn_from_profile",
-      description: "Spawn an agent job from a saved profile. Supports variable interpolation and per-call overrides.",
+      description: "Spawn an agent job from a saved profile. Supports variable interpolation and per-call overrides. Call list_profiles first to see available profiles. Built-in profiles: coder, fix-issue, implement-feature, write-tests, security-audit, refactor, review-pr, bump-deps. Use the 'coder' profile for general coding tasks — it injects Karpathy discipline guidelines.",
       inputSchema: {
         type: "object",
         properties: {
