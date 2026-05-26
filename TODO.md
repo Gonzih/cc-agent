@@ -1,8 +1,10 @@
-# TODO — swarm synthesis: test coverage report
+# TODO — coder builtin profile
 
-- [x] Write PLAN.md and TODO.md
-- [x] Run coverage suite to get final metrics
-- [x] Write test-coverage-report.md
-- [ ] git checkout -b feat/test-coverage-report
-- [ ] git add + commit + push
-- [ ] gh pr create + gh pr merge --squash --auto
+- [ ] Add `coder` profile to BUILTIN_PROFILES in src/seeds.ts
+- [ ] Update seedBuiltinProfiles to overwrite when existing.builtin === true
+- [ ] Update seeds.test.ts (count 7→8, add overwrite test, add coder test)
+- [ ] npm install && npm test
+- [ ] git checkout -b feat/coder-builtin-profile
+- [ ] git add + commit + git diff --staged review
+- [ ] git push + gh pr create + gh pr merge --squash --auto
+- [ ] npm version patch && npm publish --access public
