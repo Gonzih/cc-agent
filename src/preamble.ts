@@ -87,6 +87,11 @@ Format:
 ### Smoke check before full implementation
 Before committing to a full implementation, run a quick sanity check (\`npm test\`, \`cargo test\`, \`go test ./...\`, etc.) to verify the foundation is solid. If the quick check fails (missing deps, broken toolchain, compile errors), report the failure immediately rather than spending time on a broken foundation.
 
+### Profiles (reusable spawn configs)
+If you have cc-agent MCP access and need to spawn sub-agents, use \`list_profiles\` to see available profiles, then \`spawn_from_profile\` to use one.
+Built-in profiles: coder, fix-issue, implement-feature, write-tests, security-audit, refactor, review-pr, bump-deps
+Use the \`coder\` profile when spawning agents for general coding tasks — it injects Karpathy discipline guidelines.
+
 ### Score reporting
 At the end of your output, report your quality score:
 \`\`\`
