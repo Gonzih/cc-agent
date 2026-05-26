@@ -1,16 +1,16 @@
-# Plan: Synthesize Test Coverage Report
+# Plan: Add `coder` builtin profile
 
 ## Task Restatement
-All sub-tasks have completed (PRs #116–#122 merged). The final step is to synthesize
-their results into a single `test-coverage-report.md` file that documents:
-- What was covered and what tests were added
-- Final per-file coverage percentages from vitest v8
-- What remains uncovered and why
-- Commit to a branch and open a PR
-
-## Approach
-Single document, commit to feat/test-coverage-report, open PR.
+Add a new built-in profile named `coder` to `BUILTIN_PROFILES` in `src/seeds.ts`.
+The profile carries a `preamble` containing the Karpathy coding discipline guidelines.
+Also update `seedBuiltinProfiles` to overwrite existing builtin profiles (not just skip them).
+Verify `spawn_from_profile` already passes `preamble` through (it does — line 1197 of index.ts).
+`Profile.preamble` already exists in `src/store.ts` (line 250).
 
 ## Files to Touch
-- `test-coverage-report.md` (new)
-- `PLAN.md`, `TODO.md` (update)
+- `src/seeds.ts` — add profile, fix seeding overwrite logic
+- `src/seeds.test.ts` — update count from 7→8, add overwrite test, add coder profile test
+
+## Risks / Notes
+- Test at seeds.test.ts:30 hardcodes "7 built-in profiles" — must update to 8
+- Overwrite logic: only overwrite when `existing.builtin === true`; leave user-defined profiles alone

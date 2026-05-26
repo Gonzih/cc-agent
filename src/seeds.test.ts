@@ -27,7 +27,7 @@ describe("seedBuiltinProfiles", () => {
     store = new MemoryProfileStore();
   });
 
-  it("creates all 7 built-in profiles on first seed", async () => {
+  it("creates all 8 built-in profiles on first seed", async () => {
     await seedBuiltinProfiles(store);
     const profiles = await store.listProfiles();
     const names = profiles.map((p) => p.name);
@@ -38,6 +38,7 @@ describe("seedBuiltinProfiles", () => {
     expect(names).toContain("refactor");
     expect(names).toContain("review-pr");
     expect(names).toContain("bump-deps");
+    expect(names).toContain("coder");
     expect(profiles.length).toBe(BUILTIN_PROFILES.length);
   });
 
@@ -85,6 +86,41 @@ describe("seedBuiltinProfiles", () => {
     expect(writeTests?.defaultBudgetUsd).toBe(10);
     const bumpDeps = await store.getProfile("bump-deps");
     expect(bumpDeps?.defaultBudgetUsd).toBe(10);
+  });
+
+  it("overwrites a stale builtin profile with the latest definition", async () => {
+    const staleCreatedAt = "2020-01-01T00:00:00.000Z";
+    await store.saveProfile({
+      name: "fix-issue",
+      repoUrl: "https://github.com/stale/repo",
+      taskTemplate: "stale template",
+      createdAt: staleCreatedAt,
+      builtin: true,
+    });
+
+    await seedBuiltinProfiles(store);
+
+    const profile = await store.getProfile("fix-issue");
+    expect(profile).not.toBeNull();
+    // Definition should be updated from BUILTIN_PROFILES
+    expect(profile!.repoUrl).toBe("");
+    expect(profile!.taskTemplate).not.toBe("stale template");
+    // createdAt preserved from the existing record
+    expect(profile!.createdAt).toBe(staleCreatedAt);
+  });
+
+  it("coder profile has preamble and correct defaults", async () => {
+    await seedBuiltinProfiles(store);
+    const coder = await store.getProfile("coder");
+    expect(coder).not.toBeNull();
+    expect(coder!.builtin).toBe(true);
+    expect(coder!.defaultBudgetUsd).toBe(20);
+    expect(coder!.taskTemplate).toBe("{{task}}");
+    expect(coder!.preamble).toContain("Karpathy discipline");
+    expect(coder!.preamble).toContain("Think Before Coding");
+    expect(coder!.preamble).toContain("Simplicity First");
+    expect(coder!.preamble).toContain("Surgical Changes");
+    expect(coder!.preamble).toContain("Goal-Driven Execution");
   });
 
   it("list_profiles correctly marks builtins vs custom profiles", async () => {
