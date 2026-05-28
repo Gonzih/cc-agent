@@ -126,6 +126,34 @@ export interface SpawnOptions {
   timeoutMinutes?: number;     // wall-clock timeout in minutes per run() invocation (0 = disabled, default 120)
 }
 
+// ─── Workflow types ───────────────────────────────────────────────────────────
+
+export type WorkflowStatus = "spawning" | "running" | "done" | "failed" | "partial";
+
+export interface WorkflowStep {
+  id: string;
+  task: string;
+  job_id?: string;
+  depends_on?: string[];
+}
+
+export interface WorkflowStage {
+  stage: number;
+  steps: WorkflowStep[];
+}
+
+export interface WorkflowRecord {
+  workflow_id: string;
+  goal: string;
+  repo_url: string;
+  stages: WorkflowStage[];
+  all_job_ids: string[];
+  status: WorkflowStatus;
+  created_at: string;
+  completed_at?: string;
+  error?: string;
+}
+
 export interface JobSummary {
   id: string;
   status: JobStatus;

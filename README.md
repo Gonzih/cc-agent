@@ -37,6 +37,8 @@ Restart Claude Code. You now have 13 new MCP tools.
 | `cost_summary` | Total USD cost across all jobs, broken down by repo |
 | `get_version` | Return the running cc-agent version |
 | `create_plan` | Spawn a dependency graph of agent jobs in one call |
+| `generate_workflow` | Auto-decompose a natural language goal into ordered stages and spawn all agents with stage-based dependency enforcement |
+| `get_workflow_status` | Poll the status of a workflow created by `generate_workflow`, with per-stage and per-step breakdown |
 | `create_profile` | Save a named spawn config for repeated use with `{{variable}}` templates |
 | `list_profiles` | List all saved profiles |
 | `delete_profile` | Delete a named profile |

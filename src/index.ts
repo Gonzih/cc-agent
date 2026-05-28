@@ -27,6 +27,7 @@ import {
 import { JobManager, repoKey, normalizeRepoUrl } from "./agent.js";
 import { listDrivers, getDriverStatus } from "./drivers/index.js";
 import { runSwarm, getSwarmStatus, SWARM_MAX_AGENTS_HARD_CAP } from "./swarm.js";
+import { runWorkflow, getWorkflowStatus, WORKFLOW_MAX_STAGES_HARD_CAP } from "./workflow.js";
 import { MetaAgentManager } from "./meta-agent.js";
 import { buildEvaluatorTask } from "./evaluator.js";
 import { loadProfiles, upsertProfile, deleteProfile, getProfile, interpolate } from "./profiles.js";
@@ -823,6 +824,56 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           swarm_id: { type: "string", description: "Swarm ID returned by swarm_task" },
         },
         required: ["swarm_id"],
+      },
+    },
+    {
+      name: "generate_workflow",
+      description:
+        "Auto-decompose a high-level goal into an ordered sequence of stages, then spawn all jobs with stage-based dependency enforcement. Returns immediately with workflow_id, job_ids, and the stage breakdown. Use get_workflow_status to poll progress. Each stage only starts after ALL jobs in the prior stage complete — guaranteeing ordered execution even across 100s of agents.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          goal: {
+            type: "string",
+            description: "High-level natural language goal to decompose into workflow stages (e.g. 'build, test, and deploy X')",
+          },
+          repo_url: {
+            type: "string",
+            description: "Git repository URL for all spawned agents (https://github.com/owner/repo)",
+          },
+          max_stages: {
+            type: "number",
+            description: `Maximum number of sequential stages (default 8, hard cap ${WORKFLOW_MAX_STAGES_HARD_CAP})`,
+          },
+          max_agents_per_stage: {
+            type: "number",
+            description: "Maximum number of parallel agents per stage (default 3)",
+          },
+          max_budget_per_agent: {
+            type: "number",
+            description: "Maximum USD budget per spawned agent (default 5)",
+          },
+          agent_model: {
+            type: "string",
+            description: "Model override for spawned agents (optional)",
+          },
+          agent_driver: {
+            type: "string",
+            description: "Driver override for spawned agents (optional, e.g. 'claude', 'aider')",
+          },
+        },
+        required: ["goal", "repo_url"],
+      },
+    },
+    {
+      name: "get_workflow_status",
+      description: "Poll the status of a workflow created by generate_workflow. Returns goal, stage breakdown, per-step job IDs and statuses.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          workflow_id: { type: "string", description: "Workflow ID returned by generate_workflow" },
+        },
+        required: ["workflow_id"],
       },
     },
   ],
@@ -1972,6 +2023,120 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             synthesis_job_id: record.synthesis_job_id ?? null,
             synthesis_output: record.synthesis_output,
             decomposed_tasks: record.decomposed_tasks,
+            created_at: record.created_at,
+            completed_at: record.completed_at ?? null,
+            error: record.error ?? null,
+          }),
+        }],
+      };
+    }
+
+    case "generate_workflow": {
+      const repoUrl = normalizeRepoUrl(a.repo_url as string);
+      const goal = a.goal as string;
+      const maxStages = typeof a.max_stages === "number" ? a.max_stages : 8;
+      const maxAgentsPerStage = typeof a.max_agents_per_stage === "number" ? a.max_agents_per_stage : 3;
+
+      if (maxStages > WORKFLOW_MAX_STAGES_HARD_CAP) {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ error: `max_stages ${maxStages} exceeds hard cap of ${WORKFLOW_MAX_STAGES_HARD_CAP}` }),
+          }],
+        };
+      }
+
+      logger.info("[mcp] generate_workflow", {
+        repo_url: repoUrl,
+        goal: goal.slice(0, 80),
+        max_stages: maxStages,
+        max_agents_per_stage: maxAgentsPerStage,
+      });
+
+      try {
+        const result = await runWorkflow({
+          repoUrl,
+          goal,
+          maxStages,
+          maxAgentsPerStage,
+          maxBudgetPerAgent: typeof a.max_budget_per_agent === "number" ? a.max_budget_per_agent : 5,
+          agentModel: a.agent_model as string | undefined,
+          agentDriver: a.agent_driver as string | undefined,
+          manager,
+          redis: getRedis(),
+        });
+
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              workflow_id: result.workflow_id,
+              total_stages: result.total_stages,
+              total_jobs: result.total_jobs,
+              job_ids: result.job_ids,
+              stages: result.stages,
+              message: `Workflow started with ${result.total_jobs} agents across ${result.total_stages} stages. Use get_workflow_status to poll progress.`,
+            }),
+          }],
+        };
+      } catch (err) {
+        logger.error("[mcp] generate_workflow failed", { err: String(err) });
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ error: String(err) }),
+          }],
+        };
+      }
+    }
+
+    case "get_workflow_status": {
+      const workflowId = a.workflow_id as string;
+      logger.info("[mcp] get_workflow_status", { workflow_id: workflowId });
+
+      const record = await getWorkflowStatus(workflowId, getRedis());
+      if (!record) {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ error: `Workflow '${workflowId}' not found` }),
+          }],
+        };
+      }
+
+      // Enrich with current job statuses per stage
+      const enrichedStages = await Promise.all(
+        record.stages.map(async (stage) => {
+          const enrichedSteps = await Promise.all(
+            stage.steps.map(async (step) => {
+              let status: string | undefined;
+              let score: number | null | undefined;
+              if (step.job_id) {
+                const jobRec = await jobStore.getJob(step.job_id);
+                status = jobRec?.status;
+                score = jobRec?.score;
+              }
+              return { ...step, status: status ?? "unknown", score: score ?? null };
+            }),
+          );
+          const stageStatuses = enrichedSteps.map((s) => s.status);
+          const allDone = stageStatuses.every((s) => s === "done");
+          const anyFailed = stageStatuses.some((s) => s === "failed");
+          const stageStatus = allDone ? "done" : anyFailed ? "failed" : "running";
+          return { stage: stage.stage, status: stageStatus, steps: enrichedSteps };
+        }),
+      );
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            workflow_id: record.workflow_id,
+            goal: record.goal,
+            status: record.status,
+            total_stages: record.stages.length,
+            total_jobs: record.all_job_ids.length,
+            stages: enrichedStages,
             created_at: record.created_at,
             completed_at: record.completed_at ?? null,
             error: record.error ?? null,
