@@ -10,7 +10,7 @@ import type { UsageEvent as DriverUsageEvent } from "./drivers/types.js";
 import { injectPreamble, getPreambleText, BROWSER_HINT, CODE_QUALITY_CHECKLIST, isCodeTask } from "./preamble.js";
 import type { Job, JobSummary, SpawnOptions, JobEvent, CoordinatorPlan } from "./types.js";
 import { ensureStateDirs, isPidAlive } from "./state.js";
-import { jobStore, learningsStore, type JobRecord } from "./store.js";
+import { jobStore, learningsStore, wikiStore, type JobRecord } from "./store.js";
 import { getNamespace } from "./namespace.js";
 import { logger } from "./logger.js";
 import { isDockerAvailable, runDockerAgent, getDockerEnv } from "./docker.js";
@@ -622,6 +622,14 @@ export class JobManager {
       task = `${firstLine}\n\n${buildLearningsPreamble(priorLearnings, rk)}${restOfTask}`;
     }
 
+    // Inject wiki pages for this repo
+    const wikiPages = await wikiStore.getAllPages(rk);
+    if (wikiPages.length) {
+      const wikiBlock = wikiPages
+        .map(p => `### ${p.name}\n\n${p.content}`)
+        .join("\n\n---\n\n");
+      task += `\n\n## Wiki — ${rk}\n\n${wikiBlock}\n\n`;
+    }
 
     // Check if gstack browser daemon is available on the host
     let hasBrowser = false;

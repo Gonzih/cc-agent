@@ -31,7 +31,7 @@ import { runWorkflow, getWorkflowStatus, WORKFLOW_MAX_STAGES_HARD_CAP } from "./
 import { MetaAgentManager } from "./meta-agent.js";
 import { buildEvaluatorTask } from "./evaluator.js";
 import { loadProfiles, upsertProfile, deleteProfile, getProfile, interpolate } from "./profiles.js";
-import { planStore, jobStore, learningsStore, profileStore } from "./store.js";
+import { planStore, jobStore, learningsStore, profileStore, wikiStore } from "./store.js";
 import { seedBuiltinProfiles } from "./seeds.js";
 import { getNamespace } from "./namespace.js";
 import { initRedis, getRedis } from "./redis.js";
@@ -580,6 +580,92 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             description: "Namespace to clear learnings for (defaults to current namespace)",
           },
         },
+      },
+    },
+    {
+      name: "get_wiki",
+      description: "Return all wiki pages for a repo. Wiki pages are structured knowledge injected automatically into every spawn_agent call for the repo. Use this to inspect what knowledge is stored.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo_url: {
+            type: "string",
+            description: "Repository URL, e.g. 'https://github.com/gonzih/cc-agent'",
+          },
+        },
+        required: ["repo_url"],
+      },
+    },
+    {
+      name: "get_wiki_page",
+      description: "Return a single wiki page by name for a repo.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo_url: {
+            type: "string",
+            description: "Repository URL",
+          },
+          page: {
+            type: "string",
+            description: "Page name to retrieve",
+          },
+        },
+        required: ["repo_url", "page"],
+      },
+    },
+    {
+      name: "update_wiki_page",
+      description: "Create or update a wiki page for a repo. Content is markdown. Pages are auto-injected into spawn_agent calls for this repo.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo_url: {
+            type: "string",
+            description: "Repository URL",
+          },
+          page: {
+            type: "string",
+            description: "Page name (human-readable, e.g. 'Architecture', 'Gotchas')",
+          },
+          content: {
+            type: "string",
+            description: "Markdown content for the page",
+          },
+        },
+        required: ["repo_url", "page", "content"],
+      },
+    },
+    {
+      name: "delete_wiki_page",
+      description: "Delete a single wiki page for a repo.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo_url: {
+            type: "string",
+            description: "Repository URL",
+          },
+          page: {
+            type: "string",
+            description: "Page name to delete",
+          },
+        },
+        required: ["repo_url", "page"],
+      },
+    },
+    {
+      name: "list_wiki_pages",
+      description: "List all wiki page names for a repo.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo_url: {
+            type: "string",
+            description: "Repository URL",
+          },
+        },
+        required: ["repo_url"],
       },
     },
     {
@@ -1555,6 +1641,75 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         content: [{
           type: "text",
           text: JSON.stringify({ ok: true, namespace: ns, message: `Learnings cleared for namespace '${ns}'.` }),
+        }],
+      };
+    }
+
+    case "get_wiki": {
+      const repoUrl = normalizeRepoUrl(a.repo_url as string);
+      const slug = repoKey(repoUrl);
+      logger.info("[mcp] get_wiki", { slug });
+      const pages = await wikiStore.getAllPages(slug);
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ repo: slug, pages, total: pages.length }),
+        }],
+      };
+    }
+
+    case "get_wiki_page": {
+      const repoUrl = normalizeRepoUrl(a.repo_url as string);
+      const slug = repoKey(repoUrl);
+      const page = a.page as string;
+      logger.info("[mcp] get_wiki_page", { slug, page });
+      const content = await wikiStore.getPage(slug, page);
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ repo: slug, page, content, found: content !== null }),
+        }],
+      };
+    }
+
+    case "update_wiki_page": {
+      const repoUrl = normalizeRepoUrl(a.repo_url as string);
+      const slug = repoKey(repoUrl);
+      const page = a.page as string;
+      const content = a.content as string;
+      logger.info("[mcp] update_wiki_page", { slug, page, length: content.length });
+      await wikiStore.savePage(slug, page, content);
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ ok: true, repo: slug, page }),
+        }],
+      };
+    }
+
+    case "delete_wiki_page": {
+      const repoUrl = normalizeRepoUrl(a.repo_url as string);
+      const slug = repoKey(repoUrl);
+      const page = a.page as string;
+      logger.info("[mcp] delete_wiki_page", { slug, page });
+      const deleted = await wikiStore.deletePage(slug, page);
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ ok: deleted, repo: slug, page }),
+        }],
+      };
+    }
+
+    case "list_wiki_pages": {
+      const repoUrl = normalizeRepoUrl(a.repo_url as string);
+      const slug = repoKey(repoUrl);
+      logger.info("[mcp] list_wiki_pages", { slug });
+      const pages = await wikiStore.listPages(slug);
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ repo: slug, pages, total: pages.length }),
         }],
       };
     }

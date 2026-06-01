@@ -441,3 +441,6 @@ export const jobStore = new JobStore();
 export const profileStore = new ProfileStore();
 export const planStore = new PlanStore();
 export const learningsStore = new LearningsStore();
+
+export { wikiStore } from "./wiki.js";
+export type { WikiPage } from "./wiki.js";

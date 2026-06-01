@@ -1,23 +1,21 @@
-# Plan: Dynamic Workflows — generate_workflow + get_workflow_status
+# Plan: LLM Wiki Layer
 
-## Task Restatement
-Add two new MCP tools to cc-agent:
-- `generate_workflow`: Takes a natural language goal, decomposes it into an ordered stage DAG via Claude Haiku, spawns all jobs with stage-based `dependsOn` constraints, persists a WorkflowRecord to Redis.
-- `get_workflow_status`: Reads WorkflowRecord from Redis, enriches with live job statuses, returns per-stage breakdown.
+## Task restated
+Add a per-repo knowledge base (wiki) stored as a Redis HASH. Each page is a markdown string keyed by page name. Auto-inject wiki content into every `spawn_agent` call. Expose 5 MCP tools: get_wiki, get_wiki_page, update_wiki_page, delete_wiki_page, list_wiki_pages.
 
-## Approach
-Mirror `swarm.ts` pattern exactly — same Haiku API call, same Redis helpers, same in-memory fallback, same fire-and-return (no background loop needed for workflows since stage ordering is enforced via `dependsOn`).
+## Approach chosen
+Create `src/wiki.ts` with a WikiStore class (mirrors LearningsStore pattern in store.ts). Export a `wikiStore` singleton from store.ts. Auto-inject wiki pages in agent.ts `spawn()` after learnings injection. Register 5 MCP tools in index.ts.
 
-The key difference from swarm: instead of flat parallel tasks, we produce an ordered list of stages. Each step in stage N is spawned with `dependsOn` pointing to all job IDs from stage N-1. This guarantees stage ordering via the existing job dependency infrastructure.
+## Redis key schema
+- `cca:wiki:{repoSlug}` → Redis HASH (field=pageName, value=markdown content)
+- `cca:wiki:{repoSlug}:updated` → STRING (ISO timestamp of last update)
+- TTL: 90 days (same as learnings)
+- repoSlug = `repoKey(repoUrl)` e.g. `gonzih/cc-agent`
 
-## Files to Touch
-1. `src/types.ts` — add `WorkflowStatus`, `WorkflowStep`, `WorkflowStage`, `WorkflowRecord` types
-2. `src/workflow.ts` — NEW: decomposition engine + Redis helpers + public API
-3. `src/index.ts` — add import + two tool definitions + two case handlers
-4. `src/workflow.test.ts` — NEW: unit tests for `parseWorkflowResponse` + stage validation
-5. `README.md` — add two tools to MCP tools table
-
-## Risks / Unknowns
-- `workflowKey` does not exist in `@gonzih/cc-wire` — define inline as `cca:workflow:<id>`
-- `node_modules` not installed yet — must `npm install` before build/test
-- `WorkflowStep.job_id` is mutated during spawn loop — must be optional in the type
+## Files to touch
+- `src/wiki.ts` (new)
+- `src/store.ts` — import WikiStore and export wikiStore singleton
+- `src/agent.ts` — import wikiStore, inject wiki pages into task in spawn()
+- `src/index.ts` — import wikiStore, add 5 tool defs + case handlers
+- `src/wiki.test.ts` (new)
+- `README.md` — add 5 tools to table
