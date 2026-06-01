@@ -1,10 +1,8 @@
+import { wikiKey, wikiUpdatedKey } from "@gonzih/cc-wire";
 import { getRedis } from "./redis.js";
 import { logger } from "./logger.js";
 
 const WIKI_TTL_SECONDS = 90 * 24 * 60 * 60; // 90 days
-
-export const wikiKey = (repoSlug: string) => `cca:wiki:${repoSlug}`;
-const wikiUpdatedKey = (repoSlug: string) => `cca:wiki:${repoSlug}:updated`;
 
 export interface WikiPage {
   name: string;
