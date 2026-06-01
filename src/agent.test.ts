@@ -56,6 +56,14 @@ vi.mock("./store.js", () => ({
     clearLearnings: vi.fn(async () => {}),
     getLearningsCount: vi.fn(async () => 0),
   },
+  wikiStore: {
+    getAllPages: vi.fn(async () => []),
+    getPage: vi.fn(async () => null),
+    savePage: vi.fn(async () => {}),
+    deletePage: vi.fn(async () => false),
+    listPages: vi.fn(async () => []),
+    deleteAll: vi.fn(async () => {}),
+  },
 }));
 
 vi.mock("./redis.js", () => ({ getRedis: mockGetRedis }));

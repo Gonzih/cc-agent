@@ -39,6 +39,11 @@ Restart Claude Code. You now have 13 new MCP tools.
 | `create_plan` | Spawn a dependency graph of agent jobs in one call |
 | `generate_workflow` | Auto-decompose a natural language goal into ordered stages and spawn all agents with stage-based dependency enforcement |
 | `get_workflow_status` | Poll the status of a workflow created by `generate_workflow`, with per-stage and per-step breakdown |
+| `get_wiki` | Return all wiki pages for a repo — structured knowledge auto-injected into every spawn_agent call |
+| `get_wiki_page` | Return a single wiki page by name for a repo |
+| `update_wiki_page` | Create or update a wiki page (markdown) for a repo |
+| `delete_wiki_page` | Delete a single wiki page for a repo |
+| `list_wiki_pages` | List all wiki page names for a repo |
 | `create_profile` | Save a named spawn config for repeated use with `{{variable}}` templates |
 | `list_profiles` | List all saved profiles |
 | `delete_profile` | Delete a named profile |
