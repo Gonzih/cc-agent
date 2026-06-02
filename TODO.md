@@ -1,14 +1,15 @@
-# TODO — wiki layer
+# TODO — effort_level and fast_mode params
 
 - [x] Write PLAN.md and TODO.md
-- [ ] Create src/wiki.ts (WikiStore class + wikiStore singleton)
-- [ ] Update src/store.ts (import and re-export wikiStore)
-- [ ] Update src/agent.ts (inject wiki pages into task in spawn())
-- [ ] Update src/index.ts (import wikiStore, add 5 tool defs + case handlers)
-- [ ] Create src/wiki.test.ts (unit tests)
-- [ ] Update README.md tools table
-- [ ] npm install && npm run build && npm test
-- [ ] git checkout -b feat/wiki-layer
-- [ ] git add + diff review + commit
-- [ ] git push + gh pr create + gh pr merge --squash --auto
+- [ ] src/types.ts — add effortLevel? and fastMode? to SpawnOptions
+- [ ] src/store.ts — add effortLevel? and fastMode? to JobRecord and Profile interfaces
+- [ ] src/agent.ts — prepend /effort and /fast commands in spawn()
+- [ ] src/index.ts — update spawn_agent MCP schema + param mapping
+- [ ] src/index.ts — update create_plan step schema + handler
+- [ ] src/index.ts — update create_profile schema + spawn_from_profile handler
+- [ ] Tests for prompt injection
+- [ ] README.md update
+- [ ] npm run build && npm test
+- [ ] git checkout -b feat/effort-fast-params
+- [ ] git add + diff review + commit + push + PR + merge
 - [ ] npm version patch && git push --follow-tags && npm publish --access public

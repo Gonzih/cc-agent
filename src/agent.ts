@@ -8,7 +8,7 @@ import { v4 as uuidv4 } from "uuid";
 import { getDriver } from "./drivers/index.js";
 import type { UsageEvent as DriverUsageEvent } from "./drivers/types.js";
 import { injectPreamble, getPreambleText, BROWSER_HINT, CODE_QUALITY_CHECKLIST, isCodeTask } from "./preamble.js";
-import type { Job, JobSummary, SpawnOptions, JobEvent, CoordinatorPlan } from "./types.js";
+import type { Job, JobSummary, SpawnOptions, JobEvent, CoordinatorPlan, EffortLevel } from "./types.js";
 import { ensureStateDirs, isPidAlive } from "./state.js";
 import { jobStore, learningsStore, wikiStore, type JobRecord } from "./store.js";
 import { getNamespace } from "./namespace.js";
@@ -306,6 +306,8 @@ function toRecord(job: Job): JobRecord {
     timeoutMinutes: job.timeoutMinutes,
     timedOut: job.timedOut,
     failReason: job.failReason,
+    effortLevel: job.effortLevel,
+    fastMode: job.fastMode,
   };
 }
 
@@ -354,6 +356,8 @@ function fromRecord(r: JobRecord): Job {
     timeoutMinutes: r.timeoutMinutes,
     timedOut: r.timedOut,
     failReason: r.failReason,
+    effortLevel: r.effortLevel as EffortLevel | undefined,
+    fastMode: r.fastMode,
   };
 }
 
@@ -686,6 +690,8 @@ export class JobManager {
       noPreamble: opts.noPreamble,
       retryCount: 0,
       timeoutMinutes: opts.timeoutMinutes ?? DEFAULT_TIMEOUT_MINUTES,
+      effortLevel: opts.effortLevel,
+      fastMode: opts.fastMode,
     };
     this.jobs.set(id, job);
     this.persistJob(job);
@@ -923,7 +929,7 @@ export class JobManager {
       await new Promise<void>((resolve, reject) => {
         const agentProc = driver.spawn({
           cwd: workDir!,
-          task: injectPreamble(job.task + repoContext, job.preamble, job.noPreamble),
+          task: injectPreamble(job.task + repoContext, job.preamble, job.noPreamble, job.effortLevel, job.fastMode),
           budgetUsd: job.maxBudgetUsd ?? 20,
           token,
           continueSession: isResume || !!job.continueSession,
@@ -1266,7 +1272,7 @@ export class JobManager {
         const proc = runDockerAgent({
           containerName,
           repoUrl: job.repoUrl,
-          task: injectPreamble(DOCKER_PREAMBLE + job.task, job.preamble, job.noPreamble),
+          task: injectPreamble(DOCKER_PREAMBLE + job.task, job.preamble, job.noPreamble, job.effortLevel, job.fastMode),
           anthropicToken: token,
           githubToken,
           namespace,
@@ -1493,6 +1499,8 @@ export class JobManager {
       siblings: j.siblings,
       isolation: j.dockerIsolation ? "docker" as const : "host" as const,
       resumedFrom: j.resumedFrom,
+      effortLevel: j.effortLevel,
+      fastMode: j.fastMode,
     }));
   }
 

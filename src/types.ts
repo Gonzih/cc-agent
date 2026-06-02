@@ -2,6 +2,8 @@ import type { Writable } from "stream";
 
 export type JobStatus = "pending" | "cloning" | "running" | "done" | "failed" | "cancelled" | "sleeping" | "pending_approval" | "rejected" | "interrupted";
 
+export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max" | "auto";
+
 export interface CoordinatorPlan {
   next_step?: {
     repo_url: string;
@@ -92,6 +94,8 @@ export interface Job {
   timeoutMinutes?: number;     // wall-clock timeout in minutes (0 = disabled, default 120)
   timedOut?: boolean;          // true if job was killed due to timeout
   failReason?: string;         // machine-readable failure reason: 'timeout' | 'budget_exceeded'
+  effortLevel?: EffortLevel;   // /effort command level: low|medium|high|xhigh|max|auto
+  fastMode?: boolean;          // if true, prepend /fast command at session start
 }
 
 export interface SpawnOptions {
@@ -124,6 +128,8 @@ export interface SpawnOptions {
   openaiApiKey?: string;       // API key override for OpenAI-compatible drivers
   noPreamble?: boolean;        // if true, no preamble injected — raw task passed directly
   timeoutMinutes?: number;     // wall-clock timeout in minutes per run() invocation (0 = disabled, default 120)
+  effortLevel?: EffortLevel;   // /effort command level: low|medium|high|xhigh|max|auto
+  fastMode?: boolean;          // if true, prepend /fast command at session start
 }
 
 // ─── Workflow types ───────────────────────────────────────────────────────────
@@ -183,4 +189,6 @@ export interface JobSummary {
   siblings?: string[];
   isolation?: "docker" | "host";
   resumedFrom?: string;
+  effortLevel?: EffortLevel;
+  fastMode?: boolean;
 }

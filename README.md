@@ -62,6 +62,8 @@ Restart Claude Code. You now have 13 new MCP tools.
 | `max_budget_usd` | number | no | Spend cap in USD (default: 20) |
 | `session_id` | string | no | Session ID from a prior job's `sessionIdAfter` — resumes that session |
 | `depends_on` | string[] | no | Job IDs that must be `done` before this job starts (queued as `pending`) |
+| `effort_level` | string | no | Token spend strategy: `low \| medium \| high \| xhigh \| max \| auto`. Injects `/effort <level>` at session start. |
+| `fast_mode` | boolean | no | If `true`, inject `/fast` at session start (faster output, same model). Default: `false`. |
 
 ## create_plan parameters
 
@@ -79,6 +81,8 @@ Each step in `steps`:
 | `task` | string | yes | Task prompt for Claude Code |
 | `create_branch` | string | no | New branch to create before running |
 | `depends_on` | string[] | no | Step IDs from this plan that must complete first |
+| `effort_level` | string | no | Token spend strategy for this step (`low \| medium \| high \| xhigh \| max \| auto`). |
+| `fast_mode` | boolean | no | If `true`, inject `/fast` at session start for this step. |
 
 ## create_profile parameters
 
@@ -90,6 +94,8 @@ Each step in `steps`:
 | `default_budget_usd` | number | no | Default USD budget for jobs from this profile |
 | `branch` | string | no | Branch to check out after cloning |
 | `description` | string | no | Human-readable profile description |
+| `effort_level` | string | no | Default effort level for all jobs spawned from this profile. |
+| `fast_mode` | boolean | no | If `true`, enable fast mode by default for jobs from this profile. |
 
 ## spawn_from_profile parameters
 
@@ -100,6 +106,8 @@ Each step in `steps`:
 | `task_override` | string | no | Use this task instead of the profile template |
 | `branch_override` | string | no | Override the profile's branch |
 | `budget_override` | number | no | Override the profile's default budget |
+| `effort_level` | string | no | Override the profile's default effort level for this spawn. |
+| `fast_mode` | boolean | no | Override the profile's fast mode setting for this spawn. |
 
 ## Usage examples
 

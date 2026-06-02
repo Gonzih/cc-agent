@@ -32,6 +32,7 @@ import { MetaAgentManager } from "./meta-agent.js";
 import { buildEvaluatorTask } from "./evaluator.js";
 import { loadProfiles, upsertProfile, deleteProfile, getProfile, interpolate } from "./profiles.js";
 import { planStore, jobStore, learningsStore, profileStore, wikiStore } from "./store.js";
+import type { EffortLevel } from "./types.js";
 import { seedBuiltinProfiles } from "./seeds.js";
 import { getNamespace } from "./namespace.js";
 import { initRedis, getRedis } from "./redis.js";
@@ -214,6 +215,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             description:
               "Wall-clock timeout in minutes per active run. Job is terminated (SIGTERM then SIGKILL) if it exceeds this limit. Set to 0 to disable. Default: 120 (2 hours).",
           },
+          effort_level: {
+            type: "string",
+            enum: ["low", "medium", "high", "xhigh", "max", "auto"],
+            description:
+              "Token spend strategy. Maps to Claude Code's /effort command injected at session start. 'low' = minimal tokens, fast and cheap. 'high'/'xhigh'/'max' = more thorough, higher cost. 'auto' = let the model decide. Default: unset (Claude Code default).",
+          },
+          fast_mode: {
+            type: "boolean",
+            description:
+              "If true, inject /fast at session start to enable fast mode (faster output, same model). Default: false.",
+          },
           coordinator_plan: {
             type: "object",
             description: "Optional plan for cc-tg coordinator. If set, cc-tg will spawn the nextStep when this job completes.",
@@ -361,6 +373,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "string",
             description: "Custom workflow preamble to inject before every task spawned from this profile. Overrides the default preamble (optional).",
           },
+          effort_level: {
+            type: "string",
+            enum: ["low", "medium", "high", "xhigh", "max", "auto"],
+            description: "Default effort level for jobs spawned from this profile. Can be overridden at spawn time (optional).",
+          },
+          fast_mode: {
+            type: "boolean",
+            description: "If true, enable fast mode by default for jobs spawned from this profile. Can be overridden at spawn time (optional).",
+          },
         },
         required: ["name", "repo_url", "task_template"],
       },
@@ -432,6 +453,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                   type: "string",
                   enum: ["best_score", "score_prop", "latest"],
                   description: "How to pick the winner: best_score (highest score wins), score_prop (score-proportional random selection), latest (most recently completed). Default: best_score",
+                },
+                effort_level: {
+                  type: "string",
+                  enum: ["low", "medium", "high", "xhigh", "max", "auto"],
+                  description: "Token spend strategy for this step. Injects /effort <level> at session start. Default: unset.",
+                },
+                fast_mode: {
+                  type: "boolean",
+                  description: "If true, inject /fast at session start for this step. Default: false.",
                 },
               },
               required: ["id", "repo_url", "task"],
@@ -704,6 +734,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           budget_override: {
             type: "number",
             description: "Override the profile's default budget (optional)",
+          },
+          effort_level: {
+            type: "string",
+            enum: ["low", "medium", "high", "xhigh", "max", "auto"],
+            description: "Override the profile's default effort level for this spawn (optional).",
+          },
+          fast_mode: {
+            type: "boolean",
+            description: "Override the profile's fast mode setting for this spawn (optional).",
           },
         },
         required: ["profile_name"],
@@ -1001,6 +1040,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         preamble: a.custom_preamble as string | undefined,
         noPreamble: a.no_preamble === true,
         timeoutMinutes: a.timeout_minutes as number | undefined,
+        effortLevel: a.effort_level as EffortLevel | undefined,
+        fastMode: a.fast_mode === true,
       });
 
       if (a.coordinator_plan) {
@@ -1275,6 +1316,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         branch: a.branch as string | undefined,
         description: a.description as string | undefined,
         preamble: a.preamble as string | undefined,
+        effortLevel: a.effort_level as EffortLevel | undefined,
+        fastMode: a.fast_mode as boolean | undefined,
         createdAt: new Date().toISOString(),
       });
       return {
@@ -1332,6 +1375,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         branch: (a.branch_override as string | undefined) ?? profile.branch,
         maxBudgetUsd: (a.budget_override as number | undefined) ?? profile.defaultBudgetUsd,
         preamble: profile.preamble,
+        effortLevel: (a.effort_level as EffortLevel | undefined) ?? profile.effortLevel,
+        fastMode: (a.fast_mode as boolean | undefined) ?? profile.fastMode,
       });
       return {
         content: [
@@ -1355,6 +1400,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         branches?: number;
         branch_eval?: "test_pass_rate" | "pr_merged" | "manual";
         branch_select?: "best_score" | "score_prop" | "latest";
+        effort_level?: EffortLevel;
+        fast_mode?: boolean;
       }>;
 
       const stepIdToJobId = new Map<string, string>();
@@ -1383,6 +1430,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
               createBranch: branchName,
               dependsOn: resolvedDeps,
               variantIndex: i,
+              effortLevel: step.effort_level,
+              fastMode: step.fast_mode,
             });
             variantJobIds.push(jobId);
           }
@@ -1433,6 +1482,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             task: step.task,
             createBranch: step.create_branch,
             dependsOn: resolvedDeps,
+            effortLevel: step.effort_level,
+            fastMode: step.fast_mode,
           });
 
           stepIdToJobId.set(step.id, jobId);
