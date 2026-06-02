@@ -1,4 +1,5 @@
 import { wikiKey, wikiUpdatedKey } from "@gonzih/cc-wire";
+export { wikiKey };
 import { getRedis } from "./redis.js";
 import { logger } from "./logger.js";
 

@@ -173,6 +173,42 @@ describe("injectPreamble", () => {
     const result = injectPreamble("fix typo", "PREAMBLE\n");
     expect(result).not.toContain("Planning reminder");
   });
+
+  it("prepends /effort command before preamble when effortLevel is set", async () => {
+    const { injectPreamble } = await import("./preamble.js");
+    const result = injectPreamble("my task", "PREAMBLE\n", false, "high");
+    expect(result).toMatch(/^\/effort high\n/);
+    expect(result).toContain("PREAMBLE");
+    expect(result).toContain("my task");
+  });
+
+  it("prepends /fast command before preamble when fastMode is true", async () => {
+    const { injectPreamble } = await import("./preamble.js");
+    const result = injectPreamble("my task", "PREAMBLE\n", false, undefined, true);
+    expect(result).toMatch(/^\/fast\n/);
+    expect(result).toContain("PREAMBLE");
+    expect(result).toContain("my task");
+  });
+
+  it("prepends both /effort and /fast when both are set", async () => {
+    const { injectPreamble } = await import("./preamble.js");
+    const result = injectPreamble("my task", "PREAMBLE\n", false, "max", true);
+    expect(result).toMatch(/^\/effort max\n\/fast\n/);
+    expect(result).toContain("PREAMBLE");
+    expect(result).toContain("my task");
+  });
+
+  it("prepends /effort before the raw task when noPreamble is true", async () => {
+    const { injectPreamble } = await import("./preamble.js");
+    const result = injectPreamble("my task", undefined, true, "low");
+    expect(result).toBe("/effort low\nmy task");
+  });
+
+  it("returns task unchanged when neither effortLevel nor fastMode is set", async () => {
+    const { injectPreamble } = await import("./preamble.js");
+    const result = injectPreamble("my task", "PREAMBLE\n");
+    expect(result).toBe("PREAMBLE\nmy task");
+  });
 });
 
 describe("getPreambleText", () => {

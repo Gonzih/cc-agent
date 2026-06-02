@@ -18,7 +18,7 @@ import {
   readLogSync,
   type PersistedJob,
 } from "./state.js";
-import type { JobStatus, TokenUsage, OnComplete } from "./types.js";
+import type { JobStatus, TokenUsage, OnComplete, EffortLevel } from "./types.js";
 import { logger } from "./logger.js";
 
 const JOB_TTL_SECONDS = 7 * 24 * 60 * 60;   // 7 days
@@ -87,6 +87,8 @@ export interface JobRecord {
   timeoutMinutes?: number;
   timedOut?: boolean;
   failReason?: string;
+  effortLevel?: EffortLevel;
+  fastMode?: boolean;
 }
 
 export class JobStore {
@@ -250,6 +252,8 @@ export interface Profile {
   preamble?: string;
   builtin?: boolean;
   createdAt: string;
+  effortLevel?: EffortLevel;
+  fastMode?: boolean;
 }
 
 export class ProfileStore {

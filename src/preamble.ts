@@ -124,10 +124,13 @@ export function isComplexTask(task: string): boolean {
   return COMPLEX_TASK_PATTERN.test(task) && task.length > 100;
 }
 
-export function injectPreamble(task: string, customPreamble?: string, noPreamble?: boolean): string {
-  if (noPreamble) return task;
+export function injectPreamble(task: string, customPreamble?: string, noPreamble?: boolean, effortLevel?: string, fastMode?: boolean): string {
+  let prefix = "";
+  if (effortLevel) prefix += `/effort ${effortLevel}\n`;
+  if (fastMode) prefix += `/fast\n`;
+  if (noPreamble) return prefix + task;
   const preamble = customPreamble ?? getPreamble();
-  let injected = preamble + task;
+  let injected = prefix + preamble + task;
   if (isComplexTask(task)) {
     injected += `\n\n> **Planning reminder:** This looks like a complex task. Write PLAN.md and TODO.md before writing any code.\n`;
   }
