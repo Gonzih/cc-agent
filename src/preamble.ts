@@ -125,12 +125,18 @@ export function isComplexTask(task: string): boolean {
 }
 
 export function injectPreamble(task: string, customPreamble?: string, noPreamble?: boolean, effortLevel?: string, fastMode?: boolean): string {
-  let prefix = "";
-  if (effortLevel) prefix += `/effort ${effortLevel}\n`;
-  if (fastMode) prefix += `/fast\n`;
-  if (noPreamble) return prefix + task;
+  // Build effort/fast instructions as natural language — slash commands (/effort, /fast) are not
+  // available in spawned agent environments and cause "Unknown skill" errors on startup.
+  let effortInstruction = "";
+  if (effortLevel) {
+    effortInstruction += `**Effort level: ${effortLevel}** — spend tokens proportionally. low=minimal, medium=standard, high=thorough, xhigh=exhaustive, max=spare nothing.\n`;
+  }
+  if (fastMode) {
+    effortInstruction += `**Fast mode enabled** — prioritize speed; avoid lengthy reasoning chains unless strictly necessary.\n`;
+  }
+  if (noPreamble) return effortInstruction + task;
   const preamble = customPreamble ?? getPreamble();
-  let injected = prefix + preamble + task;
+  let injected = preamble + effortInstruction + task;
   if (isComplexTask(task)) {
     injected += `\n\n> **Planning reminder:** This looks like a complex task. Write PLAN.md and TODO.md before writing any code.\n`;
   }

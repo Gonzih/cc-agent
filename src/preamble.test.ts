@@ -174,34 +174,38 @@ describe("injectPreamble", () => {
     expect(result).not.toContain("Planning reminder");
   });
 
-  it("prepends /effort command before preamble when effortLevel is set", async () => {
+  it("injects effort level instruction after preamble when effortLevel is set", async () => {
     const { injectPreamble } = await import("./preamble.js");
     const result = injectPreamble("my task", "PREAMBLE\n", false, "high");
-    expect(result).toMatch(/^\/effort high\n/);
-    expect(result).toContain("PREAMBLE");
+    // Preamble first, then effort instruction, then task — no slash commands
+    expect(result).toMatch(/^PREAMBLE\n\*\*Effort level: high\*\*/);
     expect(result).toContain("my task");
+    expect(result).not.toContain("/effort");
   });
 
-  it("prepends /fast command before preamble when fastMode is true", async () => {
+  it("injects fast mode instruction after preamble when fastMode is true", async () => {
     const { injectPreamble } = await import("./preamble.js");
     const result = injectPreamble("my task", "PREAMBLE\n", false, undefined, true);
-    expect(result).toMatch(/^\/fast\n/);
-    expect(result).toContain("PREAMBLE");
+    expect(result).toMatch(/^PREAMBLE\n\*\*Fast mode enabled\*\*/);
     expect(result).toContain("my task");
+    expect(result).not.toContain("/fast");
   });
 
-  it("prepends both /effort and /fast when both are set", async () => {
+  it("injects both effort and fast instructions after preamble when both are set", async () => {
     const { injectPreamble } = await import("./preamble.js");
     const result = injectPreamble("my task", "PREAMBLE\n", false, "max", true);
-    expect(result).toMatch(/^\/effort max\n\/fast\n/);
-    expect(result).toContain("PREAMBLE");
+    expect(result).toMatch(/^PREAMBLE\n\*\*Effort level: max\*\*/);
+    expect(result).toContain("**Fast mode enabled**");
     expect(result).toContain("my task");
+    expect(result).not.toMatch(/^\/effort/);
   });
 
-  it("prepends /effort before the raw task when noPreamble is true", async () => {
+  it("injects effort instruction before the raw task when noPreamble is true", async () => {
     const { injectPreamble } = await import("./preamble.js");
     const result = injectPreamble("my task", undefined, true, "low");
-    expect(result).toBe("/effort low\nmy task");
+    expect(result).toMatch(/^\*\*Effort level: low\*\*/);
+    expect(result).toContain("my task");
+    expect(result).not.toContain("/effort");
   });
 
   it("returns task unchanged when neither effortLevel nor fastMode is set", async () => {
