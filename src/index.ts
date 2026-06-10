@@ -2357,10 +2357,16 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 });
 
 // Top-level crash guards — log but never kill the process
+// EPIPE = MCP client disconnected (stdout pipe broken) — exit cleanly, don't flood logs
+process.stdout.on('error', (err) => {
+  if ((err as NodeJS.ErrnoException).code === 'EPIPE') process.exit(0);
+});
 process.on('uncaughtException', (err) => {
+  if ((err as NodeJS.ErrnoException).code === 'EPIPE') process.exit(0);
   logger.error('[cc-agent] uncaughtException — process will NOT exit', { err: String(err) });
 });
 process.on('unhandledRejection', (reason) => {
+  if (reason instanceof Error && (reason as NodeJS.ErrnoException).code === 'EPIPE') process.exit(0);
   logger.error('[cc-agent] unhandledRejection — process will NOT exit', { reason: String(reason) });
 });
 
