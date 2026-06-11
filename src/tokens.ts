@@ -2,6 +2,8 @@ import { getRedis } from "./redis.js";
 import { logger } from "./logger.js";
 import { TOKEN_INDEX_KEY } from "@gonzih/cc-wire";
 
+export const MASTER_TOKEN_KEY = "cca:token:master";
+
 export interface TokenStatus {
   index: number;
   total: number;
@@ -73,6 +75,22 @@ export async function getTokenStatus(): Promise<TokenStatus> {
   // incremented past the last token and are wrapping around again).
   const allExhausted = counter >= total;
   return { index, total, allExhausted };
+}
+
+/**
+ * Get the best available token. Tries loadTokens() first (env-based); falls back to
+ * cca:token:master in Redis (written at startup by the launchd instance which has the env).
+ * Used by meta-agent to obtain a token even when MCP env has CLAUDE_* vars stripped.
+ */
+export async function getMasterToken(): Promise<string> {
+  const tokens = loadTokens();
+  if (tokens.length > 0) return tokens[0];
+
+  const redis = getRedis();
+  if (!redis) return "";
+
+  const stored = await redis.get(MASTER_TOKEN_KEY);
+  return stored ?? "";
 }
 
 /** Reset all tokens (when reset time passes or manually triggered). */

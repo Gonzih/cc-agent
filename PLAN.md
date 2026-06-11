@@ -1,21 +1,30 @@
-# Plan: Fix spawning_namespace env-var injection (0.15.33)
+# Plan: Fix meta-agent token injection via Redis fallback (0.15.34)
 
 ## Task restated
-Previous fix (0.15.32) added `?? namespace` fallback in spawn handlers, where `namespace`
-is a module-level constant set once at startup. The root issue: if CC_AGENT_NAMESPACE is
-set in `.mcp.json` env but the server process shares state from a stale startup, the cached
-value may lag. The fix: read `process.env.CC_AGENT_NAMESPACE` at request time as primary
-fallback, before the cached `namespace` constant.
+When the MCP cc-agent instance starts (spawned by Claude Code from .mcp.json), Claude Code
+strips CLAUDE_* env vars. So `loadTokens()` returns [] in the MCP instance. When
+`messageMetaAgent` runs, it spawns `claude -p` with `env: process.env`, which has no token
+→ claude exits "Not logged in".
+
+The launchd cc-agent instance HAS the token. Fix: launchd writes its token to
+`cca:token:master` in Redis at startup. MCP instance reads it as fallback via `getMasterToken()`.
 
 ## Approach
-Minimal 2-line change in spawn handlers:
-1. `spawn_agent` handler: `?? namespace` → `?? process.env.CC_AGENT_NAMESPACE ?? namespace`
-2. `spawn_from_profile` handler: same change
+Three-file minimal change:
+
+1. `src/tokens.ts`: add `getMasterToken()` — tries `loadTokens()[0]` first, Redis fallback
+2. `src/index.ts`: at startup write master token to `cca:token:master` if tokens available
+3. `src/meta-agent.ts`: call `getMasterToken()` before spawning claude, inject into env if missing
 
 ## Files to touch
-- `src/index.ts` — two one-line changes
-- `src/index.test.ts` — add test verifying env var used at request time
+- `src/tokens.ts` — add `getMasterToken()` + `MASTER_TOKEN_KEY` constant
+- `src/index.ts` — write master token to Redis at startup
+- `src/meta-agent.ts` — inject master token into spawn env
+- `src/tokens.test.ts` — test `getMasterToken()` Redis fallback path
 
 ## Risks
-- Purely additive: explicit `spawning_namespace` arg still wins; `namespace` is ultimate fallback
-- If CC_AGENT_NAMESPACE unset at request time, behavior identical to before
+- Purely additive: if `loadTokens()` has tokens (launchd instance), `getMasterToken()` returns
+  them directly with no Redis call — behavior unchanged for launchd
+- If MCP instance also has tokens somehow, its own env is used first
+- Token in Redis could be stale if token rotates — acceptable since master token is the primary
+  fallback for the tokenless MCP path, not for rotation logic
