@@ -21,6 +21,7 @@ export interface JobEvent {
   score?: number;
   timestamp: string;     // ISO 8601 date string
   coordinatorPlan?: CoordinatorPlan;
+  spawningNamespace?: string; // namespace of the caller that spawned this job
 }
 
 export interface OnComplete {
@@ -96,6 +97,7 @@ export interface Job {
   failReason?: string;         // machine-readable failure reason: 'timeout' | 'budget_exceeded'
   effortLevel?: EffortLevel;   // /effort command level: low|medium|high|xhigh|max|auto
   fastMode?: boolean;          // if true, prepend /fast command at session start
+  spawningNamespace?: string;  // namespace of the caller that spawned this job (for notification routing)
 }
 
 export interface SpawnOptions {
@@ -130,6 +132,7 @@ export interface SpawnOptions {
   timeoutMinutes?: number;     // wall-clock timeout in minutes per run() invocation (0 = disabled, default 120)
   effortLevel?: EffortLevel;   // /effort command level: low|medium|high|xhigh|max|auto
   fastMode?: boolean;          // if true, prepend /fast command at session start
+  spawningNamespace?: string;  // namespace of the caller (routes completion notification back to caller)
 }
 
 // ─── Workflow types ───────────────────────────────────────────────────────────

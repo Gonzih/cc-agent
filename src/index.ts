@@ -226,6 +226,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             description:
               "If true, inject /fast at session start to enable fast mode (faster output, same model). Default: false.",
           },
+          spawning_namespace: {
+            type: "string",
+            description:
+              "Namespace of the caller (e.g. 'simorgh-mobile-app'). When set, job completion notifications are routed to cca:notify:{spawning_namespace} instead of the server's default namespace. Use this when spawning from a meta-agent so the completion signal returns to your namespace.",
+          },
           coordinator_plan: {
             type: "object",
             description: "Optional plan for cc-tg coordinator. If set, cc-tg will spawn the nextStep when this job completes.",
@@ -1042,6 +1047,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         timeoutMinutes: a.timeout_minutes as number | undefined,
         effortLevel: a.effort_level as EffortLevel | undefined,
         fastMode: a.fast_mode === true,
+        spawningNamespace: a.spawning_namespace as string | undefined,
       });
 
       if (a.coordinator_plan) {
