@@ -287,6 +287,29 @@ describe("MCP server handlers", () => {
     expect(data.spawning_namespace.length).toBeGreaterThan(0);
   });
 
+  it("spawn_agent uses CC_AGENT_NAMESPACE env var as spawning_namespace fallback at request time", async () => {
+    const callHandler = capturedHandlers.get(CallToolRequestSchema)!;
+    const prev = process.env.CC_AGENT_NAMESPACE;
+    process.env.CC_AGENT_NAMESPACE = "env-injected-namespace";
+    try {
+      const spawnResult = await callHandler({
+        params: {
+          name: "spawn_agent",
+          arguments: { repo_url: "https://github.com/gonzih/repo.git", task: "env-ns test" },
+        },
+      });
+      const { job_id } = JSON.parse(spawnResult.content[0].text);
+      const statusResult = await callHandler({
+        params: { name: "get_job_status", arguments: { job_id } },
+      });
+      const data = JSON.parse(statusResult.content[0].text);
+      expect(data.spawning_namespace).toBe("env-injected-namespace");
+    } finally {
+      if (prev === undefined) delete process.env.CC_AGENT_NAMESPACE;
+      else process.env.CC_AGENT_NAMESPACE = prev;
+    }
+  });
+
   it("spawn_from_profile tool schema includes spawning_namespace parameter", async () => {
     const handler = capturedHandlers.get(ListToolsRequestSchema)!;
     const result = await handler({});

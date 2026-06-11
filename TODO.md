@@ -1,10 +1,9 @@
-# TODO — Issue #134: auto-inject spawning_namespace
+# TODO — Fix spawning_namespace env-var injection (0.15.33)
 
-- [ ] git checkout -b fix/auto-inject-spawning-namespace
-- [ ] Fix spawn_agent handler: auto-inject namespace as spawningNamespace fallback
-- [ ] Fix spawn_from_profile handler: add spawningNamespace + schema field
-- [ ] Fix create_plan handler: add spawningNamespace to all manager.spawn() calls
-- [ ] Add test verifying auto-injection when spawning_namespace not provided
-- [ ] npm run build && npm test
+- [ ] git checkout -b fix/spawning-namespace-inject-env
+- [ ] Fix spawn_agent handler: `?? namespace` → `?? process.env.CC_AGENT_NAMESPACE ?? namespace`
+- [ ] Fix spawn_from_profile handler: same
+- [ ] Add test verifying CC_AGENT_NAMESPACE env var used at request time
+- [ ] npm install && npm run build && npm test
 - [ ] git add + diff review + commit + push + PR + merge
 - [ ] npm version patch && git push --follow-tags && npm publish --access public

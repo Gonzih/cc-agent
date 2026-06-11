@@ -1,28 +1,21 @@
-# Plan: Auto-inject spawning_namespace for meta-agent-spawned jobs (Issue #134)
+# Plan: Fix spawning_namespace env-var injection (0.15.33)
 
 ## Task restated
-When a meta-agent calls `spawn_agent` or `spawn_from_profile` without explicitly passing
-`spawning_namespace`, the coordinator falls back to its own namespace (e.g. "money-brain"),
-routing notifications to the wrong channel. Fix: auto-inject the current MCP server's
-namespace as `spawningNamespace` when the caller doesn't provide one.
-
-## Mechanism
-- `injectMcpConfig(cwd, namespace)` sets `CC_AGENT_NAMESPACE` env var in the spawned MCP server
-- `getNamespace()` reads this env var → local `namespace` variable at index.ts:92
-- When running inside a meta-agent workspace: `namespace` = meta-agent's namespace
-- When running as main coordinator: `namespace` = coordinator's namespace
-- Either way, auto-fallback to `namespace` is always correct
+Previous fix (0.15.32) added `?? namespace` fallback in spawn handlers, where `namespace`
+is a module-level constant set once at startup. The root issue: if CC_AGENT_NAMESPACE is
+set in `.mcp.json` env but the server process shares state from a stale startup, the cached
+value may lag. The fix: read `process.env.CC_AGENT_NAMESPACE` at request time as primary
+fallback, before the cached `namespace` constant.
 
 ## Approach
-Minimal change: use `?? namespace` as fallback in three places:
-1. `spawn_agent` handler: `spawningNamespace: (a.spawning_namespace as string | undefined) ?? namespace`
-2. `spawn_from_profile` handler: add `spawningNamespace` to spawn call + add field to input schema
-3. `create_plan` handler: add `spawningNamespace: namespace` to all `manager.spawn()` calls
+Minimal 2-line change in spawn handlers:
+1. `spawn_agent` handler: `?? namespace` → `?? process.env.CC_AGENT_NAMESPACE ?? namespace`
+2. `spawn_from_profile` handler: same change
 
 ## Files to touch
-- `src/index.ts` — three handler sites + spawn_from_profile input schema
+- `src/index.ts` — two one-line changes
+- `src/index.test.ts` — add test verifying env var used at request time
 
 ## Risks
-- create_plan doesn't accept spawning_namespace from args — wiring it through the step schema
-  would be a larger change; auto-injecting `namespace` is correct and sufficient
-- The auto-inject is a fallback (??), so explicit override still works
+- Purely additive: explicit `spawning_namespace` arg still wins; `namespace` is ultimate fallback
+- If CC_AGENT_NAMESPACE unset at request time, behavior identical to before
