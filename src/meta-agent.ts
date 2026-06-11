@@ -7,6 +7,7 @@ import { v4 as randomUUID } from "uuid";
 import { getRedis } from "./redis.js";
 import { logger } from "./logger.js";
 import { injectMcpConfig } from "./mcp-inject.js";
+import { getMasterToken } from "./tokens.js";
 import {
   META_AGENTS_INDEX,
   metaKey,
@@ -227,11 +228,19 @@ export class MetaAgentManager {
     }
     this.writeLiveStatus(namespace).catch(() => {});
 
+    // Inject master token so the claude subprocess can authenticate even when
+    // this process (MCP instance) has CLAUDE_* env vars stripped by Claude Code.
+    const masterToken = await getMasterToken();
+    const spawnEnv = { ...process.env };
+    if (masterToken && !spawnEnv.CLAUDE_CODE_OAUTH_TOKEN && !spawnEnv.CLAUDE_TOKENS) {
+      spawnEnv.CLAUDE_CODE_OAUTH_TOKEN = masterToken;
+    }
+
     const proc = spawn("claude", claudeArgs, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
       detached: false,
-      env: process.env,
+      env: spawnEnv,
     });
 
     this.activeProcesses.set(namespace, proc);

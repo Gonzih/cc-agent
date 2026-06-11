@@ -24,7 +24,7 @@ vi.mock("./logger.js", () => ({
 }));
 
 // Import after mocks are set up
-import { loadTokens, getCurrentToken, rotateToken, getTokenStatus, resetTokens } from "./tokens.js";
+import { loadTokens, getCurrentToken, rotateToken, getTokenStatus, resetTokens, getMasterToken, MASTER_TOKEN_KEY } from "./tokens.js";
 import { getRedis } from "./redis.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -249,6 +249,37 @@ describe("rotateToken - boundary conditions", () => {
     const tok = await rotateToken();
     expect(tok).toBe("");
     expect(mockRedis.incr).not.toHaveBeenCalled();
+  });
+});
+
+// ─── getMasterToken ───────────────────────────────────────────────────────────
+
+describe("getMasterToken", () => {
+  it("returns env token when CLAUDE_CODE_OAUTH_TOKEN is set", async () => {
+    setEnv({ CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-env" });
+    expect(await getMasterToken()).toBe("sk-ant-env");
+    expect(mockRedis.get).not.toHaveBeenCalled();
+  });
+
+  it("returns first env token when CLAUDE_TOKENS is set", async () => {
+    setEnv({ CLAUDE_TOKENS: "tok-a,tok-b" });
+    expect(await getMasterToken()).toBe("tok-a");
+    expect(mockRedis.get).not.toHaveBeenCalled();
+  });
+
+  it("falls back to Redis cca:token:master when no env tokens", async () => {
+    mockRedisStore.set(MASTER_TOKEN_KEY, "sk-ant-redis-master");
+    expect(await getMasterToken()).toBe("sk-ant-redis-master");
+    expect(mockRedis.get).toHaveBeenCalledWith(MASTER_TOKEN_KEY);
+  });
+
+  it("returns empty string when no env tokens and Redis has no master key", async () => {
+    expect(await getMasterToken()).toBe("");
+  });
+
+  it("returns empty string when no env tokens and Redis unavailable", async () => {
+    vi.mocked(getRedis).mockReturnValueOnce(null);
+    expect(await getMasterToken()).toBe("");
   });
 });
 

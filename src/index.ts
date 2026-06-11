@@ -40,7 +40,7 @@ import { logger } from "./logger.js";
 import { Coordinator } from "./coordinator.js";
 import { CronEngine } from "./cron.js";
 import { listCcAgentContainers } from "./docker.js";
-import { loadTokens, getTokenStatus } from "./tokens.js";
+import { loadTokens, getTokenStatus, MASTER_TOKEN_KEY } from "./tokens.js";
 import {
   coordinatorPlanKey,
   jobDoneChannel,
@@ -2391,6 +2391,11 @@ const redis = getRedis();
 if (redis) {
   await redis.set(CC_AGENT_VERSION_KEY, PKG_VERSION);
   logger.info(`[cc-agent] version ${PKG_VERSION} written to Redis`);
+  const masterToken = loadTokens()[0];
+  if (masterToken) {
+    await redis.set(MASTER_TOKEN_KEY, masterToken);
+    logger.info("[cc-agent] master token written to Redis");
+  }
 }
 await manager.init();
 await seedBuiltinProfiles(profileStore);
