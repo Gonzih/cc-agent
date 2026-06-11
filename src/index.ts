@@ -749,6 +749,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "boolean",
             description: "Override the profile's fast mode setting for this spawn (optional).",
           },
+          spawning_namespace: {
+            type: "string",
+            description: "Namespace of the caller. When set, job completion notifications are routed to cca:notify:{spawning_namespace}. Defaults to the current namespace.",
+          },
         },
         required: ["profile_name"],
       },
@@ -1047,7 +1051,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         timeoutMinutes: a.timeout_minutes as number | undefined,
         effortLevel: a.effort_level as EffortLevel | undefined,
         fastMode: a.fast_mode === true,
-        spawningNamespace: a.spawning_namespace as string | undefined,
+        spawningNamespace: (a.spawning_namespace as string | undefined) ?? namespace,
       });
 
       if (a.coordinator_plan) {
@@ -1149,6 +1153,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
               approval_issue_url: job.approvalIssueUrl,
               score: job.score ?? null,
               score_source: job.scoreSource ?? null,
+              spawning_namespace: job.spawningNamespace ?? null,
               pub_sub_channel: jobDoneChannel(job.id),
             }),
           },
@@ -1383,6 +1388,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         preamble: profile.preamble,
         effortLevel: (a.effort_level as EffortLevel | undefined) ?? profile.effortLevel,
         fastMode: (a.fast_mode as boolean | undefined) ?? profile.fastMode,
+        spawningNamespace: (a.spawning_namespace as string | undefined) ?? namespace,
       });
       return {
         content: [
@@ -1438,6 +1444,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
               variantIndex: i,
               effortLevel: step.effort_level,
               fastMode: step.fast_mode,
+              spawningNamespace: namespace,
             });
             variantJobIds.push(jobId);
           }
@@ -1460,6 +1467,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             repoUrl: normalizeRepoUrl(step.repo_url),
             task: evalTask,
             dependsOn: variantJobIds,
+            spawningNamespace: namespace,
           });
 
           // The logical step ID maps to the evaluator job (so subsequent steps depend on it)
@@ -1490,6 +1498,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             dependsOn: resolvedDeps,
             effortLevel: step.effort_level,
             fastMode: step.fast_mode,
+            spawningNamespace: namespace,
           });
 
           stepIdToJobId.set(step.id, jobId);

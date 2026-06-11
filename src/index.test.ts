@@ -268,6 +268,33 @@ describe("MCP server handlers", () => {
     }
   });
 
+  it("spawn_agent auto-injects current namespace as spawning_namespace when not provided", async () => {
+    const callHandler = capturedHandlers.get(CallToolRequestSchema)!;
+    const spawnResult = await callHandler({
+      params: {
+        name: "spawn_agent",
+        arguments: { repo_url: "https://github.com/gonzih/repo.git", task: "test auto-inject" },
+      },
+    });
+    const { job_id } = JSON.parse(spawnResult.content[0].text);
+    const statusResult = await callHandler({
+      params: { name: "get_job_status", arguments: { job_id } },
+    });
+    const data = JSON.parse(statusResult.content[0].text);
+    // spawning_namespace must be set — never null — when not explicitly provided
+    expect(data.spawning_namespace).not.toBeNull();
+    expect(typeof data.spawning_namespace).toBe("string");
+    expect(data.spawning_namespace.length).toBeGreaterThan(0);
+  });
+
+  it("spawn_from_profile tool schema includes spawning_namespace parameter", async () => {
+    const handler = capturedHandlers.get(ListToolsRequestSchema)!;
+    const result = await handler({});
+    const tool = result.tools.find((t: { name: string }) => t.name === "spawn_from_profile");
+    expect(tool).toBeDefined();
+    expect(tool.inputSchema.properties.spawning_namespace).toBeDefined();
+  });
+
   it("spawn_agent tool schema includes smoke_test parameter", async () => {
     const handler = capturedHandlers.get(ListToolsRequestSchema)!;
     const result = await handler({});

@@ -1,25 +1,28 @@
-# Plan: Update cc-wire to 0.1.6, use NotificationPayload type
+# Plan: Auto-inject spawning_namespace for meta-agent-spawned jobs (Issue #134)
 
 ## Task restated
-Update `@gonzih/cc-wire` to 0.1.6 and replace any ad-hoc notification payload
-construction with the `NotificationPayload` type from cc-wire. Ensure all
-channel/key construction uses cc-wire builders (no hardcoded `cca:notify:*`
-strings in production code).
+When a meta-agent calls `spawn_agent` or `spawn_from_profile` without explicitly passing
+`spawning_namespace`, the coordinator falls back to its own namespace (e.g. "money-brain"),
+routing notifications to the wrong channel. Fix: auto-inject the current MCP server's
+namespace as `spawningNamespace` when the caller doesn't provide one.
 
-## Findings
-- `package.json` already bumped to `^0.1.6` by `npm install`
-- `coordinator.ts::notify()` builds `JSON.stringify({ text })` without typing —
-  fix: `const payload: NotificationPayload = { text }; JSON.stringify(payload)`
-- All key/channel builders (`notifyChannel`, `notifyLogKey`) already imported
-  from cc-wire in production code — no hardcoded strings to replace
-- Test file has hardcoded `"cca:notify:test-ns"` but those are correct
-  assertions (they verify the channel name resolves correctly) — no change needed
-- `notifyPublishCommand` and `Transport` type are exported by 0.1.6 but have no
-  current call sites in cc-agent — no forced usage needed
-
-## Files to touch
-- `src/coordinator.ts` — add `NotificationPayload` import; type the payload
+## Mechanism
+- `injectMcpConfig(cwd, namespace)` sets `CC_AGENT_NAMESPACE` env var in the spawned MCP server
+- `getNamespace()` reads this env var → local `namespace` variable at index.ts:92
+- When running inside a meta-agent workspace: `namespace` = meta-agent's namespace
+- When running as main coordinator: `namespace` = coordinator's namespace
+- Either way, auto-fallback to `namespace` is always correct
 
 ## Approach
-Minimal: one import addition + one type annotation. Everything else already uses
-cc-wire builders correctly.
+Minimal change: use `?? namespace` as fallback in three places:
+1. `spawn_agent` handler: `spawningNamespace: (a.spawning_namespace as string | undefined) ?? namespace`
+2. `spawn_from_profile` handler: add `spawningNamespace` to spawn call + add field to input schema
+3. `create_plan` handler: add `spawningNamespace: namespace` to all `manager.spawn()` calls
+
+## Files to touch
+- `src/index.ts` — three handler sites + spawn_from_profile input schema
+
+## Risks
+- create_plan doesn't accept spawning_namespace from args — wiring it through the step schema
+  would be a larger change; auto-injecting `namespace` is correct and sufficient
+- The auto-inject is a fallback (??), so explicit override still works
