@@ -89,6 +89,7 @@ export interface JobRecord {
   failReason?: string;
   effortLevel?: EffortLevel;
   fastMode?: boolean;
+  spawningNamespace?: string;
 }
 
 export class JobStore {

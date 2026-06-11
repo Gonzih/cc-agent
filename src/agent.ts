@@ -308,6 +308,7 @@ function toRecord(job: Job): JobRecord {
     failReason: job.failReason,
     effortLevel: job.effortLevel,
     fastMode: job.fastMode,
+    spawningNamespace: job.spawningNamespace,
   };
 }
 
@@ -358,6 +359,7 @@ function fromRecord(r: JobRecord): Job {
     failReason: r.failReason,
     effortLevel: r.effortLevel as EffortLevel | undefined,
     fastMode: r.fastMode,
+    spawningNamespace: r.spawningNamespace,
   };
 }
 
@@ -531,6 +533,7 @@ export class JobManager {
           score: job.score ?? undefined,
           timestamp: new Date().toISOString(), // Protocol: ISO 8601 string
           coordinatorPlan: planRaw ? (JSON.parse(planRaw) as CoordinatorPlan) : undefined,
+          spawningNamespace: job.spawningNamespace,
         };
         // Write to Redis Stream for durability (fire-and-forget, never crash on failure)
         try {
@@ -544,6 +547,7 @@ export class JobManager {
             'coordinatorPlan', JSON.stringify(event.coordinatorPlan ?? null),
             'score', event.score !== undefined ? String(event.score) : '',
             'timestamp', event.timestamp, // ISO 8601 string — XADD requires string values
+            'spawningNamespace', event.spawningNamespace ?? '',
           );
           await redis.xtrim(EVENT_STREAM, 'MAXLEN', '~', '500');
         } catch (streamErr) {
@@ -692,6 +696,7 @@ export class JobManager {
       timeoutMinutes: opts.timeoutMinutes ?? DEFAULT_TIMEOUT_MINUTES,
       effortLevel: opts.effortLevel,
       fastMode: opts.fastMode,
+      spawningNamespace: opts.spawningNamespace,
     };
     this.jobs.set(id, job);
     this.persistJob(job);

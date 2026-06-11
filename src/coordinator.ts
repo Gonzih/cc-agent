@@ -145,7 +145,7 @@ export class Coordinator {
   }
 
   async processEvent(event: JobEvent): Promise<void> {
-    const { jobId, status, title, repoUrl, score, coordinatorPlan } = event;
+    const { jobId, status, title, repoUrl, score, coordinatorPlan, spawningNamespace } = event;
 
     if (status === "done") {
       // 1. Coordinator plan — spawn follow-up job if configured
@@ -169,7 +169,8 @@ export class Coordinator {
       const scorePart = typeof score === "number" ? ` · ${score.toFixed(2)}` : "";
       const line1 = `${icon} ${repoShort}${scorePart} · ${shortId}`;
       const line2 = title.slice(0, 160);
-      await notify(this.namespace, `${line1}\n${line2}`);
+      const targetNamespace = spawningNamespace ?? this.namespace;
+      await notify(targetNamespace, `${line1}\n${line2}`);
     }
   }
 
@@ -221,5 +222,6 @@ function parseStreamEntry(fields: string[]): JobEvent {
     coordinatorPlan: obj.coordinatorPlan
       ? (JSON.parse(obj.coordinatorPlan) as CoordinatorPlan | null) ?? undefined
       : undefined,
+    spawningNamespace: obj.spawningNamespace || undefined,
   };
 }
