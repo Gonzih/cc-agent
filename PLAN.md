@@ -1,31 +1,25 @@
-# Plan: Fix Job Completion Notification Routing
+# Plan: Update cc-wire to 0.1.6, use NotificationPayload type
 
 ## Task restated
-When a meta-agent (e.g. simorgh-mobile-app) calls `spawn_agent`, the completion notification
-currently always goes to `cca:notify:{server_namespace}` (money-brain). It should route to
-`cca:notify:{spawning_namespace}` — whatever namespace the caller provides.
+Update `@gonzih/cc-wire` to 0.1.6 and replace any ad-hoc notification payload
+construction with the `NotificationPayload` type from cc-wire. Ensure all
+channel/key construction uses cc-wire builders (no hardcoded `cca:notify:*`
+strings in production code).
 
-## Root cause
-1. `spawn_agent` has no `spawning_namespace` parameter
-2. `JobRecord` and `JobEvent` have no `spawningNamespace` field
-3. `coordinator.ts::processEvent()` always uses `this.namespace` (server's own namespace)
-
-## Approach
-Add `spawning_namespace` as an optional parameter through the entire call chain:
-
-1. **`src/types.ts`** — add `spawningNamespace?` to `JobEvent` and `SpawnOptions`; add to `Job`
-2. **`src/store.ts`** — add `spawningNamespace?` to `JobRecord`
-3. **`src/agent.ts`** — propagate through `spawn()`, `toRecord()`, `fromRecord()`, `publishJobEvent()`
-4. **`src/coordinator.ts`** — parse `spawningNamespace` from stream entry; use it in `processEvent()`
-5. **`src/index.ts`** — add `spawning_namespace` parameter to `spawn_agent` schema and handler
+## Findings
+- `package.json` already bumped to `^0.1.6` by `npm install`
+- `coordinator.ts::notify()` builds `JSON.stringify({ text })` without typing —
+  fix: `const payload: NotificationPayload = { text }; JSON.stringify(payload)`
+- All key/channel builders (`notifyChannel`, `notifyLogKey`) already imported
+  from cc-wire in production code — no hardcoded strings to replace
+- Test file has hardcoded `"cca:notify:test-ns"` but those are correct
+  assertions (they verify the channel name resolves correctly) — no change needed
+- `notifyPublishCommand` and `Transport` type are exported by 0.1.6 but have no
+  current call sites in cc-agent — no forced usage needed
 
 ## Files to touch
-- `src/types.ts`
-- `src/store.ts`
-- `src/agent.ts`
-- `src/coordinator.ts`
-- `src/index.ts`
+- `src/coordinator.ts` — add `NotificationPayload` import; type the payload
 
-## Risks
-- Low risk: purely additive optional field; falls back to existing behavior when not set
-- `parseStreamEntry` must handle missing field gracefully (it uses `obj.x ?? ""` pattern)
+## Approach
+Minimal: one import addition + one type annotation. Everything else already uses
+cc-wire builders correctly.
