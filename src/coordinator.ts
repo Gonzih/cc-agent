@@ -16,6 +16,7 @@ import {
   COORDINATOR_GROUP,
   notifyChannel,
   notifyLogKey,
+  type NotificationPayload,
 } from "@gonzih/cc-wire";
 
 const COORDINATOR_POLL_MS = 2000;
@@ -25,11 +26,11 @@ const LOW_SCORE_THRESHOLD = 0.5;
 export async function notify(namespace: string, text: string): Promise<void> {
   const redis = getRedis();
   if (!redis) return;
-  // Protocol: NotificationPayload must be JSON { text, driver?, model?, cost? }
-  const payload = JSON.stringify({ text });
+  const payload: NotificationPayload = { text };
+  const payloadStr = JSON.stringify(payload);
   try {
-    await redis.publish(notifyChannel(namespace), payload);
-    await redis.lpush(notifyLogKey(namespace), payload);
+    await redis.publish(notifyChannel(namespace), payloadStr);
+    await redis.lpush(notifyLogKey(namespace), payloadStr);
     await redis.ltrim(notifyLogKey(namespace), 0, 99);
   } catch (err) {
     logger.warn("coordinator:notify-failed", { namespace, err: String(err) });
