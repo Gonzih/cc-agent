@@ -173,6 +173,10 @@ export class MetaAgentManager {
       lastActivity: new Date().toISOString(),
     });
 
+    // Write initial status to Redis immediately so consumers see the agent
+    // without waiting for the first message to be delivered.
+    await this.writeLiveStatus(namespace);
+
     logger.info("meta-agent:started", { namespace, cwd });
     return state;
   }
@@ -434,6 +438,10 @@ export class MetaAgentManager {
       if (proc && !proc.killed) {
         state.status = "running";
         state.pid = proc.pid;
+      } else if (state.status === "running") {
+        // No active process tracked (e.g. after a server restart) — correct stale "running" status.
+        state.status = "idle";
+        state.pid = undefined;
       }
       // Merge in-memory live status fields
       const ls = this.liveStatus.get(namespace);
