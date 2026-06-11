@@ -1051,7 +1051,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         timeoutMinutes: a.timeout_minutes as number | undefined,
         effortLevel: a.effort_level as EffortLevel | undefined,
         fastMode: a.fast_mode === true,
-        spawningNamespace: (a.spawning_namespace as string | undefined) ?? namespace,
+        spawningNamespace: (a.spawning_namespace as string | undefined) ?? process.env.CC_AGENT_NAMESPACE ?? namespace,
       });
 
       if (a.coordinator_plan) {
@@ -1388,7 +1388,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         preamble: profile.preamble,
         effortLevel: (a.effort_level as EffortLevel | undefined) ?? profile.effortLevel,
         fastMode: (a.fast_mode as boolean | undefined) ?? profile.fastMode,
-        spawningNamespace: (a.spawning_namespace as string | undefined) ?? namespace,
+        spawningNamespace: (a.spawning_namespace as string | undefined) ?? process.env.CC_AGENT_NAMESPACE ?? namespace,
       });
       return {
         content: [
