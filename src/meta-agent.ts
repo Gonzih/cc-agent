@@ -8,6 +8,7 @@ import { getRedis } from "./redis.js";
 import { logger } from "./logger.js";
 import { injectMcpConfig } from "./mcp-inject.js";
 import { getMasterToken } from "./tokens.js";
+import { resolveClaude } from "./claude.js";
 import {
   META_AGENTS_INDEX,
   metaKey,
@@ -234,24 +235,53 @@ export class MetaAgentManager {
 
     // Inject master token so the claude subprocess can authenticate even when
     // this process (MCP instance) has CLAUDE_* env vars stripped by Claude Code.
-    const masterToken = await getMasterToken();
+    // Use a timeout so Redis latency can't stall the spawn path.
+    const masterToken = await Promise.race([
+      getMasterToken(),
+      new Promise<string>((resolve) => setTimeout(() => resolve(""), 3000)),
+    ]);
     const spawnEnv = { ...process.env };
     if (masterToken && !spawnEnv.CLAUDE_CODE_OAUTH_TOKEN && !spawnEnv.CLAUDE_TOKENS) {
       spawnEnv.CLAUDE_CODE_OAUTH_TOKEN = masterToken;
     }
 
-    const proc = spawn("claude", claudeArgs, {
-      cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-      detached: false,
-      env: spawnEnv,
-    });
+    const claudeBin = resolveClaude();
+    logger.info("meta-agent:spawn-attempt", { namespace, claudeBin, sessionExists, args: claudeArgs });
+
+    let proc: ChildProcess;
+    try {
+      proc = spawn(claudeBin, claudeArgs, {
+        cwd,
+        stdio: ["ignore", "pipe", "pipe"],
+        detached: false,
+        env: spawnEnv,
+      });
+    } catch (spawnErr) {
+      // Binary not found or other pre-exec error — clean up and rethrow with context.
+      logger.error("meta-agent:spawn-failed", { namespace, claudeBin, err: String(spawnErr) });
+      this.activeProcesses.delete(namespace);
+      const ls2 = this.liveStatus.get(namespace);
+      if (ls2) { ls2.isTyping = false; }
+      this.writeLiveStatus(namespace).catch(() => {});
+      await this.updateStatus(namespace, "idle");
+      throw new Error(`Failed to spawn claude for namespace '${namespace}': ${String(spawnErr)}`);
+    }
 
     this.activeProcesses.set(namespace, proc);
 
     // Update pid in persisted state.
     state.pid = proc.pid;
     await this.saveState(state);
+
+    // Detect immediate spawn failures (ENOENT fires as an 'error' event, not 'close').
+    proc.on("error", (spawnError) => {
+      logger.error("meta-agent:process-error", { namespace, claudeBin, err: String(spawnError) });
+      this.activeProcesses.delete(namespace);
+      const ls = this.liveStatus.get(namespace);
+      if (ls) { ls.isTyping = false; ls.currentTool = undefined; }
+      this.writeLiveStatus(namespace).catch(() => {});
+      this.updateStatus(namespace, "idle").catch(() => {});
+    });
 
     proc.stdout?.setEncoding("utf-8");
     proc.stdout?.on("data", (chunk: string) => {
@@ -277,7 +307,7 @@ export class MetaAgentManager {
       this.updateStatus(namespace, "idle").catch(() => {});
     });
 
-    logger.info("meta-agent:message-spawned", { namespace, pid: proc.pid, sessionExists });
+    logger.info("meta-agent:message-spawned", { namespace, pid: proc.pid, sessionExists, claudeBin });
   }
 
   async listMetaAgents(): Promise<MetaAgentInfo[]> {
