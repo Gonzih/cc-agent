@@ -72,6 +72,9 @@ export class MetaAgentManager {
   }
 
   private async pollInputQueues(): Promise<void> {
+    // Only poll if running as the launchd-blessed instance (has OAuth token in env).
+    // MCP subprocess instances skip polling — they only serve tool calls.
+    if (!process.env.CLAUDE_CODE_OAUTH_TOKEN && !process.env.CLAUDE_TOKENS) return;
     const redis = getRedis();
     if (!redis) return;
     try {
