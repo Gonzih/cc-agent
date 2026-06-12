@@ -1,30 +1,27 @@
-# Plan: Fix meta-agent token injection via Redis fallback (0.15.34)
+# Plan: Fix MCP subprocess stealing meta-agent input queue messages
 
 ## Task restated
-When the MCP cc-agent instance starts (spawned by Claude Code from .mcp.json), Claude Code
-strips CLAUDE_* env vars. So `loadTokens()` returns [] in the MCP instance. When
-`messageMetaAgent` runs, it spawns `claude -p` with `env: process.env`, which has no token
-→ claude exits "Not logged in".
+MCP subprocess cc-agent instances (spawned by Claude sessions) start polling META_AGENTS_INDEX
+and compete with the launchd-blessed instance for input queue messages. They consume messages
+but fail to process them (no OAuth token), causing Discord/Telegram messages to be lost silently.
 
-The launchd cc-agent instance HAS the token. Fix: launchd writes its token to
-`cca:token:master` in Redis at startup. MCP instance reads it as fallback via `getMasterToken()`.
+## Fix
+Add a single guard at the top of `pollInputQueues()` in `src/meta-agent.ts`:
 
-## Approach
-Three-file minimal change:
+```ts
+if (!process.env.CLAUDE_CODE_OAUTH_TOKEN && !process.env.CLAUDE_TOKENS) return;
+```
 
-1. `src/tokens.ts`: add `getMasterToken()` — tries `loadTokens()[0]` first, Redis fallback
-2. `src/index.ts`: at startup write master token to `cca:token:master` if tokens available
-3. `src/meta-agent.ts`: call `getMasterToken()` before spawning claude, inject into env if missing
+Signal logic:
+- launchd plist sets `CLAUDE_CODE_OAUTH_TOKEN` in the service environment
+- MCP subprocesses do NOT inherit this env var (Claude Code strips CLAUDE_* vars)
+- `CLAUDE_TOKENS` is the legacy multi-token env var — also check it for completeness
 
 ## Files to touch
-- `src/tokens.ts` — add `getMasterToken()` + `MASTER_TOKEN_KEY` constant
-- `src/index.ts` — write master token to Redis at startup
-- `src/meta-agent.ts` — inject master token into spawn env
-- `src/tokens.test.ts` — test `getMasterToken()` Redis fallback path
+- `src/meta-agent.ts` — add guard as first statement in `pollInputQueues()`
+- `src/meta-agent.test.ts` — set env var in poller tests; add guard behavior test
 
 ## Risks
-- Purely additive: if `loadTokens()` has tokens (launchd instance), `getMasterToken()` returns
-  them directly with no Redis call — behavior unchanged for launchd
-- If MCP instance also has tokens somehow, its own env is used first
-- Token in Redis could be stale if token rotates — acceptable since master token is the primary
-  fallback for the tokenless MCP path, not for rotation logic
+- Existing poller tests call `pollInputQueues()` directly without the env var → will become no-ops.
+  Fix: set `process.env.CLAUDE_CODE_OAUTH_TOKEN = "test-token"` in the poller describe block.
+- The guard is purely additive for the launchd path — no behavioral change when token is present.

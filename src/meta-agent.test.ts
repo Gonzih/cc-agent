@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "events";
 
 // --- Hoisted mocks ---
@@ -507,6 +507,30 @@ describe("MetaAgentManager", () => {
   });
 
   describe("startPoller / pollInputQueues", () => {
+    beforeEach(() => {
+      // Simulate launchd-blessed instance so the guard allows polling
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = "test-token";
+    });
+    afterEach(() => {
+      delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+      delete process.env.CLAUDE_TOKENS;
+    });
+
+    it("does not poll when neither CLAUDE_CODE_OAUTH_TOKEN nor CLAUDE_TOKENS is set", async () => {
+      delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+      mockRedisSmembers.mockResolvedValue(["my-repo"]);
+      await (manager as any).pollInputQueues();
+      expect(mockRedisSmembers).not.toHaveBeenCalled();
+    });
+
+    it("polls when CLAUDE_TOKENS is set (legacy multi-token env var)", async () => {
+      delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+      process.env.CLAUDE_TOKENS = "legacy-token";
+      mockRedisSmembers.mockResolvedValue([]);
+      await (manager as any).pollInputQueues();
+      expect(mockRedisSmembers).toHaveBeenCalled();
+    });
+
     it("startPoller registers an interval and stopPoller clears it", () => {
       vi.useFakeTimers();
       manager.startPoller();
