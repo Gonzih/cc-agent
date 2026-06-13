@@ -28,7 +28,6 @@ import { JobManager, repoKey, normalizeRepoUrl } from "./agent.js";
 import { listDrivers, getDriverStatus } from "./drivers/index.js";
 import { runSwarm, getSwarmStatus, SWARM_MAX_AGENTS_HARD_CAP } from "./swarm.js";
 import { runWorkflow, getWorkflowStatus, WORKFLOW_MAX_STAGES_HARD_CAP } from "./workflow.js";
-import { MetaAgentManager } from "./meta-agent.js";
 import { buildEvaluatorTask } from "./evaluator.js";
 import { loadProfiles, upsertProfile, deleteProfile, getProfile, interpolate } from "./profiles.js";
 import { planStore, jobStore, learningsStore, profileStore, wikiStore } from "./store.js";
@@ -92,7 +91,6 @@ const manager = new JobManager(token);
 const namespace = getNamespace();
 const coordinator = new Coordinator(manager, namespace);
 const cronEngine = new CronEngine(manager, namespace);
-const metaAgentManager = new MetaAgentManager();
 
 const server = new Server(
   { name: "cc-agent", version: PKG_VERSION },
@@ -818,52 +816,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       name: "get_pubsub_status",
       description: "Debug: show all active Redis pub/sub channels and subscriber counts. Use to diagnose chat sync issues.",
       inputSchema: { type: "object", properties: {}, required: [] },
-    },
-    {
-      name: "start_meta_agent",
-      description: "Clone repo (if needed) into ~/cc-agent-workspace/{namespace} and start a persistent Claude Code session there. Meta-agents are long-lived — they receive multiple messages over time and publish responses to cca:chat:outgoing:{namespace}.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          namespace: {
-            type: "string",
-            description: "Repo short name, e.g. polly-gamba. Used as the workspace directory name and Redis key prefix.",
-          },
-          repo_url: {
-            type: "string",
-            description: "Optional GitHub URL. Defaults to https://github.com/gonzih/{namespace}",
-          },
-        },
-        required: ["namespace"],
-      },
-    },
-    {
-      name: "message_meta_agent",
-      description: "Send a message to a running meta-agent session. Spawns a claude -p process in the meta-agent workspace with --continue if a prior session exists. Responses are published line-by-line to cca:chat:outgoing:{namespace}.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          namespace: { type: "string", description: "Meta-agent namespace to message" },
-          message: { type: "string", description: "Message content to send to the Claude session" },
-        },
-        required: ["namespace", "message"],
-      },
-    },
-    {
-      name: "list_meta_agents",
-      description: "List all meta-agent sessions and their status. Returns namespace, repoUrl, cwd, pid, status, startedAt, lastActivity, currentTool, isTyping, lastMessage, turnCount. Live status is also written to Redis cca:meta-agent:status:{namespace}.",
-      inputSchema: { type: "object", properties: {} },
-    },
-    {
-      name: "stop_meta_agent",
-      description: "Stop a running meta-agent session. Kills the Claude process and updates Redis status to stopped.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          namespace: { type: "string", description: "Meta-agent namespace to stop" },
-        },
-        required: ["namespace"],
-      },
     },
     {
       name: "list_drivers",
@@ -1946,82 +1898,6 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       };
     }
 
-    case "start_meta_agent": {
-      logger.info("[mcp] start_meta_agent", { namespace: a.namespace });
-      const ns = a.namespace as string;
-      const repoUrl = a.repo_url as string | undefined;
-      try {
-        const info = await metaAgentManager.startMetaAgent(ns, repoUrl);
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({ ok: true, ...info, message: `Meta-agent started. Responses published to cca:chat:outgoing:${ns}.` }),
-          }],
-        };
-      } catch (err) {
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({ ok: false, error: String(err) }),
-          }],
-        };
-      }
-    }
-
-    case "message_meta_agent": {
-      logger.info("[mcp] message_meta_agent", { namespace: a.namespace });
-      const ns = a.namespace as string;
-      const message = a.message as string;
-      try {
-        await metaAgentManager.messageMetaAgent(ns, message);
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({ ok: true, namespace: ns, message: "Message delivered to meta-agent. Responses will be published to cca:chat:outgoing:" + ns }),
-          }],
-        };
-      } catch (err) {
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({ ok: false, error: String(err) }),
-          }],
-        };
-      }
-    }
-
-    case "list_meta_agents": {
-      logger.info("[mcp] list_meta_agents");
-      const agents = await metaAgentManager.listMetaAgents();
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({ agents, total: agents.length }),
-        }],
-      };
-    }
-
-    case "stop_meta_agent": {
-      logger.info("[mcp] stop_meta_agent", { namespace: a.namespace });
-      const ns = a.namespace as string;
-      try {
-        await metaAgentManager.stopMetaAgent(ns);
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({ ok: true, namespace: ns, message: "Meta-agent stopped." }),
-          }],
-        };
-      } catch (err) {
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({ ok: false, error: String(err) }),
-          }],
-        };
-      }
-    }
-
     case "list_drivers": {
       logger.info("[mcp] list_drivers");
       const drivers = getDriverStatus();
@@ -2413,8 +2289,6 @@ logger.info("[cc-agent] startup", { crons_loaded: _startupCrons.length });
 for (const _cron of _startupCrons) {
   logger.info("[cron] registered", { id: _cron.id, schedule: _cron.schedule, intervalMs: _cron.intervalMs });
 }
-
-metaAgentManager.startPoller();
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
