@@ -133,13 +133,6 @@ vi.mock("./coordinator.js", () => ({
   notify: vi.fn(async () => {}),
 }));
 
-// Mock metaAgentManager so cron routing via messageMetaAgent is testable
-// without real fs/process calls.
-const mockMessageMetaAgent = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock("./meta-agent.js", () => ({
-  metaAgentManager: { messageMetaAgent: mockMessageMetaAgent },
-}));
-
 // fs mocks — default: no crons.json present
 vi.mock("fs", () => ({
   existsSync: vi.fn(() => false),
@@ -356,7 +349,7 @@ describe("CronEngine — tick / firing", () => {
     expect(manager.spawn).not.toHaveBeenCalled();
   });
 
-  it("fires cron with repoUrl via metaAgentManager.messageMetaAgent, not manager.spawn", async () => {
+  it("fires cron with repoUrl via manager.spawn", async () => {
     const cron: CronJob = {
       id: "c3",
       chatId: 0,
@@ -372,14 +365,10 @@ describe("CronEngine — tick / firing", () => {
 
     await engine.tick();
 
-    // When a cron has a repoUrl, it routes through the meta-agent (not spawn_agent).
-    // The namespace is derived from the last URL path segment: "myrepo".
-    expect(mockMessageMetaAgent).toHaveBeenCalledWith(
-      "myrepo",
-      "repo task",
-      "https://github.com/test/myrepo",
-    );
-    expect(manager.spawn).not.toHaveBeenCalled();
+    expect(manager.spawn).toHaveBeenCalledWith({
+      repoUrl: "https://github.com/test/myrepo",
+      task: "repo task",
+    });
   });
 
   it("does NOT fire cron with enabled: false", async () => {

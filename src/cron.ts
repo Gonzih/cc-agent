@@ -14,7 +14,6 @@ import type { JobManager } from "./agent.js";
 import { getRedis } from "./redis.js";
 import { logger } from "./logger.js";
 import { notify } from "./coordinator.js";
-import { metaAgentManager } from "./meta-agent.js";
 import { cronsKey, deletedCronsKey } from "@gonzih/cc-wire";
 
 export interface CronJob {
@@ -170,68 +169,20 @@ export class CronEngine {
         prompt: cron.prompt.slice(0, 200),
       });
 
-      // Derive a namespace from the cron's repoUrl if available.
-      // e.g. https://github.com/gonzih/polly-gamba → polly-gamba
-      const cronNamespace = this.resolveNamespace(cron);
-
-      if (cronNamespace) {
-        // Route through meta-agent: start if not running, then message it.
-        logger.info("[cron] routing-to-meta-agent", {
-          id: cron.id,
-          schedule: cron.schedule,
-          namespace: cronNamespace,
-        });
-        await metaAgentManager.messageMetaAgent(cronNamespace, cron.prompt, cron.repoUrl);
-        logger.info("[cron] fired-via-meta-agent", {
-          id: cron.id,
-          schedule: cron.schedule,
-          namespace: cronNamespace,
-        });
-      } else {
-        // Fallback: no namespace/repo → spawn an isolated agent as before.
-        logger.info("[cron] fallback-spawn-agent", {
-          id: cron.id,
-          schedule: cron.schedule,
-        });
-        const jobId = await this.manager.spawn({
-          repoUrl: cron.repoUrl ?? "",
-          task: cron.prompt,
-        });
-        logger.info("[cron] fired-via-spawn", {
-          id: cron.id,
-          schedule: cron.schedule,
-          jobId,
-        });
-      }
+      const jobId = await this.manager.spawn({
+        repoUrl: cron.repoUrl ?? "",
+        task: cron.prompt,
+      });
+      logger.info("[cron] fired-via-spawn", {
+        id: cron.id,
+        schedule: cron.schedule,
+        jobId,
+      });
 
       await this.updateLastFired(cron.id);
     } catch (err) {
       logger.warn("[cron] fire-failed", { id: cron.id, err: String(err) });
     }
-  }
-
-  /**
-   * Resolve a meta-agent namespace from a CronJob.
-   * Returns null when no repo is associated (fallback to spawn_agent).
-   *
-   * Priority:
-   *   1. cron.repoUrl — extract last path segment as namespace
-   *   2. no repoUrl → null (use spawn_agent fallback)
-   */
-  private resolveNamespace(cron: CronJob): string | null {
-    if (!cron.repoUrl) return null;
-    try {
-      const url = new URL(cron.repoUrl);
-      const parts = url.pathname.replace(/^\/+|\/+$/g, "").split("/");
-      const repoName = parts[parts.length - 1];
-      if (repoName) return repoName;
-    } catch {
-      // Not a valid URL — try splitting on /
-      const parts = cron.repoUrl.replace(/\/$/, "").split("/");
-      const repoName = parts[parts.length - 1];
-      if (repoName) return repoName;
-    }
-    return null;
   }
 
   /** Atomically update lastFiredAt via Lua script — skips if cron was deleted concurrently. */

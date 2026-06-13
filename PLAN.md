@@ -1,27 +1,32 @@
-# Plan: Fix MCP subprocess stealing meta-agent input queue messages
+# Plan: Strip meta-agent lifecycle — cc-agent becomes a pure job runner
 
 ## Task restated
-MCP subprocess cc-agent instances (spawned by Claude sessions) start polling META_AGENTS_INDEX
-and compete with the launchd-blessed instance for input queue messages. They consume messages
-but fail to process them (no OAuth token), causing Discord/Telegram messages to be lost silently.
+cc-discord now owns meta-agent processes directly. cc-agent's job is solely `spawn_agent` —
+running code tasks in temporary workspaces. This PR removes all meta-agent lifecycle code:
+polling loops, process management, workspace cloning for persistent sessions, and the four
+MCP tools that exposed this functionality. It also upgrades @gonzih/cc-wire from 0.1.6 to 0.3.0.
 
-## Fix
-Add a single guard at the top of `pollInputQueues()` in `src/meta-agent.ts`:
+## Approaches considered
 
-```ts
-if (!process.env.CLAUDE_CODE_OAUTH_TOKEN && !process.env.CLAUDE_TOKENS) return;
-```
+1. **Delete meta-agent.ts, update all consumers** — clean break, leaves cron routing changed.
+2. **Keep meta-agent.ts but stub all methods** — less clean, dead code.
+3. **Deprecation shim** — unnecessary, this is a breaking minor bump.
 
-Signal logic:
-- launchd plist sets `CLAUDE_CODE_OAUTH_TOKEN` in the service environment
-- MCP subprocesses do NOT inherit this env var (Claude Code strips CLAUDE_* vars)
-- `CLAUDE_TOKENS` is the legacy multi-token env var — also check it for completeness
+**Chosen: Approach 1.** Delete meta-agent.ts and meta-agent.test.ts entirely. Update cron.ts
+to route crons with repoUrl through manager.spawn() instead. Remove all MCP tool definitions
+and handlers. Clean, no dead code.
 
 ## Files to touch
-- `src/meta-agent.ts` — add guard as first statement in `pollInputQueues()`
-- `src/meta-agent.test.ts` — set env var in poller tests; add guard behavior test
+- `src/meta-agent.ts` — DELETE
+- `src/meta-agent.test.ts` — DELETE
+- `src/index.ts` — remove MetaAgentManager import, instance, 4 tool defs, 4 case handlers, startPoller() call
+- `src/cron.ts` — remove metaAgentManager import/usage; route repoUrl crons via manager.spawn()
+- `src/cron.test.ts` — update cron-with-repoUrl test to check manager.spawn, remove meta-agent mock
+- `package.json` — bump @gonzih/cc-wire ^0.1.6 → ^0.3.0
 
 ## Risks
-- Existing poller tests call `pollInputQueues()` directly without the env var → will become no-ops.
-  Fix: set `process.env.CLAUDE_CODE_OAUTH_TOKEN = "test-token"` in the poller describe block.
-- The guard is purely additive for the launchd path — no behavioral change when token is present.
+- cron.test.ts test "fires cron with repoUrl via metaAgentManager.messageMetaAgent" must be updated
+- chatIncomingChannel/chatOutgoingChannel still used in get_pubsub_status — keep those imports
+- CC_AGENT_VERSION_KEY still used in index.ts — keep that import
+- After removing the meta-agent routing from cron.ts, crons with repoUrl go to spawn_agent;
+  the cron.test.ts mock for meta-agent.js must be removed
