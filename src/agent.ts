@@ -551,6 +551,7 @@ export class JobManager {
           timestamp: new Date().toISOString(), // Protocol: ISO 8601 string
           coordinatorPlan: planRaw ? (JSON.parse(planRaw) as CoordinatorPlan) : undefined,
           spawningNamespace: job.spawningNamespace,
+          cronId: job.cronId,
         };
         // Write to Redis Stream for durability (fire-and-forget, never crash on failure)
         try {
@@ -565,6 +566,7 @@ export class JobManager {
             'score', event.score !== undefined ? String(event.score) : '',
             'timestamp', event.timestamp, // ISO 8601 string — XADD requires string values
             'spawningNamespace', event.spawningNamespace ?? '',
+            'cronId', event.cronId ?? '',
           );
           await redis.xtrim(EVENT_STREAM, 'MAXLEN', '~', '500');
         } catch (streamErr) {
@@ -714,6 +716,7 @@ export class JobManager {
       effortLevel: opts.effortLevel,
       fastMode: opts.fastMode,
       spawningNamespace: opts.spawningNamespace,
+      cronId: opts.cronId,
       goal: opts.goal,
       completionCriteria: opts.completionCriteria,
       qualityRubric: opts.qualityRubric,
