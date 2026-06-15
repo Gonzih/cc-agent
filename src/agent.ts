@@ -310,6 +310,7 @@ function toRecord(job: Job): JobRecord {
     effortLevel: job.effortLevel,
     fastMode: job.fastMode,
     spawningNamespace: job.spawningNamespace,
+    chatId: job.chatId,
     goal: job.goal,
     completionCriteria: job.completionCriteria,
     qualityRubric: job.qualityRubric,
@@ -369,6 +370,7 @@ function fromRecord(r: JobRecord): Job {
     effortLevel: r.effortLevel as EffortLevel | undefined,
     fastMode: r.fastMode,
     spawningNamespace: r.spawningNamespace,
+    chatId: r.chatId,
     goal: r.goal,
     completionCriteria: r.completionCriteria,
     qualityRubric: r.qualityRubric,
@@ -552,6 +554,7 @@ export class JobManager {
           coordinatorPlan: planRaw ? (JSON.parse(planRaw) as CoordinatorPlan) : undefined,
           spawningNamespace: job.spawningNamespace,
           cronId: job.cronId,
+          chatId: job.chatId,
         };
         // Write to Redis Stream for durability (fire-and-forget, never crash on failure)
         try {
@@ -567,6 +570,7 @@ export class JobManager {
             'timestamp', event.timestamp, // ISO 8601 string — XADD requires string values
             'spawningNamespace', event.spawningNamespace ?? '',
             'cronId', event.cronId ?? '',
+            'chatId', String(event.chatId ?? 0),
           );
           await redis.xtrim(EVENT_STREAM, 'MAXLEN', '~', '500');
         } catch (streamErr) {
@@ -716,6 +720,7 @@ export class JobManager {
       effortLevel: opts.effortLevel,
       fastMode: opts.fastMode,
       spawningNamespace: opts.spawningNamespace,
+      chatId: opts.chatId,
       cronId: opts.cronId,
       goal: opts.goal,
       completionCriteria: opts.completionCriteria,
