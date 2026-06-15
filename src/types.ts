@@ -28,6 +28,7 @@ export interface JobEvent {
   timestamp: string;     // ISO 8601 date string
   coordinatorPlan?: CoordinatorPlan;
   spawningNamespace?: string; // namespace of the caller that spawned this job
+  cronId?: string;        // set when this job was spawned by a cron trigger
 }
 
 export interface OnComplete {
@@ -49,6 +50,7 @@ export interface Job {
   task: string;
   branch?: string;
   createBranch?: string;
+  cronId?: string;        // set when this job was spawned by a cron trigger
   status: JobStatus;
   output: string[];
   toolCalls: string[];
@@ -120,6 +122,7 @@ export interface SpawnOptions {
   task: string;
   branch?: string;
   createBranch?: string;
+  cronId?: string;        // set when this job is spawned by a cron trigger
   claudeToken?: string;
   continueSession?: boolean;
   maxBudgetUsd?: number;

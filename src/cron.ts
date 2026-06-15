@@ -169,9 +169,12 @@ export class CronEngine {
         prompt: cron.prompt.slice(0, 200),
       });
 
+      await notify(this.namespace, JSON.stringify({ text: `⏰ cron fired: ${cron.schedule}`, is_cron: true, cron_id: cron.id }));
+
       const jobId = await this.manager.spawn({
         repoUrl: cron.repoUrl ?? "",
         task: cron.prompt,
+        cronId: cron.id,
       });
       logger.info("[cron] fired-via-spawn", {
         id: cron.id,
