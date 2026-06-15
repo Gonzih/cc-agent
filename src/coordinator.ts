@@ -37,6 +37,20 @@ export async function notify(namespace: string, text: string): Promise<void> {
   }
 }
 
+/** Publish a structured payload object directly — no double-wrapping. */
+export async function notifyPayload(namespace: string, payload: Record<string, unknown>): Promise<void> {
+  const redis = getRedis();
+  if (!redis) return;
+  const payloadStr = JSON.stringify(payload);
+  try {
+    await redis.publish(notifyChannel(namespace), payloadStr);
+    await redis.lpush(notifyLogKey(namespace), payloadStr);
+    await redis.ltrim(notifyLogKey(namespace), 0, 99);
+  } catch (err) {
+    logger.warn("coordinator:notify-payload-failed", { namespace, err: String(err) });
+  }
+}
+
 export class Coordinator {
   private running = false;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
@@ -173,15 +187,15 @@ export class Coordinator {
       const line2 = title.slice(0, 160);
       const targetNamespace = spawningNamespace ?? this.namespace;
       if (chatId) {
-        await notify(targetNamespace, JSON.stringify({
+        await notifyPayload(targetNamespace, {
           text: `${icon} ${line2}${scoreStr} (job_id: ${jobId})\n${repoUrl}`,
           chat_id: chatId,
           ...(cronId ? { is_cron: true, cron_id: cronId } : {}),
-        }));
+        });
       } else if (cronId) {
-        await notify(targetNamespace, JSON.stringify({ text: `${icon} ${line2}${scoreStr} (job_id: ${jobId})\n${repoUrl}`, is_cron: true, cron_id: cronId }));
+        await notifyPayload(targetNamespace, { text: `${icon} ${line2}${scoreStr} (job_id: ${jobId})\n${repoUrl}`, is_cron: true, cron_id: cronId });
       } else {
-        await notify(targetNamespace, `${line1}\n${line2}`);
+        await notifyPayload(targetNamespace, { text: `${line1}\n${line2}` });
       }
     }
   }

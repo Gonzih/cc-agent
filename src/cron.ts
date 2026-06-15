@@ -13,7 +13,7 @@ import { v4 as uuidv4 } from "uuid";
 import type { JobManager } from "./agent.js";
 import { getRedis } from "./redis.js";
 import { logger } from "./logger.js";
-import { notify } from "./coordinator.js";
+import { notifyPayload } from "./coordinator.js";
 import { cronsKey, deletedCronsKey } from "@gonzih/cc-wire";
 
 export interface CronJob {
@@ -169,7 +169,7 @@ export class CronEngine {
         prompt: cron.prompt.slice(0, 200),
       });
 
-      await notify(this.namespace, JSON.stringify({ text: `⏰ cron fired: ${cron.schedule}`, is_cron: true, cron_id: cron.id }));
+      await notifyPayload(this.namespace, { text: `⏰ cron fired: ${cron.schedule}`, is_cron: true, cron_id: cron.id });
 
       const jobId = await this.manager.spawn({
         repoUrl: cron.repoUrl ?? "",
