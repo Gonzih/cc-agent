@@ -9,6 +9,7 @@ import { getDriver } from "./drivers/index.js";
 import type { UsageEvent as DriverUsageEvent } from "./drivers/types.js";
 import { injectPreamble, getPreambleText, BROWSER_HINT, CODE_QUALITY_CHECKLIST, isCodeTask } from "./preamble.js";
 import type { Job, JobSummary, SpawnOptions, JobEvent, CoordinatorPlan, EffortLevel } from "./types.js";
+import { runLoopGates, LOOP_MAX_ITERATIONS } from "./loop.js";
 import { ensureStateDirs, isPidAlive } from "./state.js";
 import { jobStore, learningsStore, wikiStore, type JobRecord } from "./store.js";
 import { getNamespace } from "./namespace.js";
@@ -309,6 +310,14 @@ function toRecord(job: Job): JobRecord {
     effortLevel: job.effortLevel,
     fastMode: job.fastMode,
     spawningNamespace: job.spawningNamespace,
+    goal: job.goal,
+    completionCriteria: job.completionCriteria,
+    qualityRubric: job.qualityRubric,
+    maxIterations: job.maxIterations,
+    iteration: job.iteration,
+    evalAgentId: job.evalAgentId,
+    gateFailures: job.gateFailures,
+    loopOutputHash: job.loopOutputHash,
   };
 }
 
@@ -360,6 +369,14 @@ function fromRecord(r: JobRecord): Job {
     effortLevel: r.effortLevel as EffortLevel | undefined,
     fastMode: r.fastMode,
     spawningNamespace: r.spawningNamespace,
+    goal: r.goal,
+    completionCriteria: r.completionCriteria,
+    qualityRubric: r.qualityRubric,
+    maxIterations: r.maxIterations,
+    iteration: r.iteration,
+    evalAgentId: r.evalAgentId,
+    gateFailures: r.gateFailures,
+    loopOutputHash: r.loopOutputHash,
   };
 }
 
@@ -697,6 +714,14 @@ export class JobManager {
       effortLevel: opts.effortLevel,
       fastMode: opts.fastMode,
       spawningNamespace: opts.spawningNamespace,
+      goal: opts.goal,
+      completionCriteria: opts.completionCriteria,
+      qualityRubric: opts.qualityRubric,
+      maxIterations: opts.maxIterations != null
+        ? Math.min(opts.maxIterations, LOOP_MAX_ITERATIONS)
+        : undefined,
+      iteration: 1,
+      gateFailures: [],
     };
     this.jobs.set(id, job);
     this.persistJob(job);
@@ -1159,6 +1184,46 @@ export class JobManager {
         job.scoreSource = source;
       }
 
+      // ── LoopJob gate pipeline ────────────────────────────────────────────────
+      if (job.completionCriteria?.length && workDir) {
+        const loopOutcome = await runLoopGates({ job, manager: this, workDir });
+        job.gateFailures = loopOutcome.gateFailures;
+        this.persistJob(job);
+
+        if (loopOutcome.rerun && loopOutcome.newTask) {
+          // Gates failed — increment iteration and re-run with augmented task
+          const nextIteration = (job.iteration ?? 1) + 1;
+          this.addOutput(job, `[cc-agent:loop] Gates failed on iteration ${job.iteration}. Re-running (iteration ${nextIteration})...`);
+          logger.info("[loop] re-running", { id: job.id, nextIteration, failures: job.gateFailures?.length });
+          job.task = loopOutcome.newTask;
+          job.iteration = nextIteration;
+          job.score = null;
+          job.scoreSource = null;
+          job.workDir = undefined; // force fresh clone
+          this.persistJob(job);
+          await this.run(job, token);
+          return;
+        }
+
+        if (loopOutcome.overrideStatus) {
+          const gateTrace = (job.gateFailures ?? [])
+            .map((f) => `iteration ${f.iteration} [${f.gate}]: ${f.reason}`)
+            .join(" | ");
+          this.addOutput(job, `[cc-agent:loop] ${loopOutcome.overrideStatus}. Gate trace: ${gateTrace}`);
+          logger.warn("[loop] terminal", { id: job.id, status: loopOutcome.overrideStatus });
+          job.status = loopOutcome.overrideStatus;
+          const durationSeconds = Math.round((Date.now() - job.startedAt.getTime()) / 1000);
+          logger.info("[job] done", { id: job.id, exit_code: job.exitCode ?? 0, duration_seconds: durationSeconds, output_lines: job.output.length, cost_usd: job.costUsd, score: job.score, score_source: job.scoreSource });
+          this.persistJob(job);
+          this.publishJobEvent(job);
+          return;
+        }
+
+        // All gates passed — fall through to normal "done" handling
+        this.addOutput(job, `[cc-agent:loop] All gates passed on iteration ${job.iteration}. Job complete.`);
+      }
+      // ── end LoopJob gate pipeline ───────────────────────────────────────────
+
       job.status = "done";
       const durationSeconds = Math.round((Date.now() - job.startedAt.getTime()) / 1000);
       logger.info("[job] done", { id: job.id, exit_code: job.exitCode ?? 0, duration_seconds: durationSeconds, output_lines: job.output.length, cost_usd: job.costUsd, score: job.score, score_source: job.scoreSource });
@@ -1466,11 +1531,11 @@ export class JobManager {
       // Check Redis for the real status before assuming it's done.
       const record = await jobStore.getJob(id);
       const lines = await jobStore.getOutput(id, offset);
-      const TERMINAL = ["done", "failed", "cancelled", "rejected", "interrupted"];
+      const TERMINAL = ["done", "failed", "cancelled", "rejected", "interrupted", "loop_exhausted", "loop_stalled"];
       const done = !record || TERMINAL.includes(record.status);
       return { lines, done, toolCalls: [] };
     }
-    const done = job.status === "done" || job.status === "failed" || job.status === "cancelled" || job.status === "rejected";
+    const done = job.status === "done" || job.status === "failed" || job.status === "cancelled" || job.status === "rejected" || job.status === "loop_exhausted" || job.status === "loop_stalled";
     if (this.restoredJobs.has(id)) {
       return { lines: await jobStore.getOutput(id, offset), done, toolCalls: job.toolCalls };
     }
@@ -1586,7 +1651,7 @@ export class JobManager {
     const now = Date.now();
     for (const [id, job] of this.jobs) {
       if (
-        (job.status === "done" || job.status === "failed" || job.status === "cancelled" || job.status === "rejected") &&
+        (job.status === "done" || job.status === "failed" || job.status === "cancelled" || job.status === "rejected" || job.status === "loop_exhausted" || job.status === "loop_stalled") &&
         job.finishedAt &&
         now - job.finishedAt.getTime() > JOB_TTL_MS
       ) {

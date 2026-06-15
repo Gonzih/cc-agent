@@ -1,13 +1,13 @@
-# TODO — Strip meta-agent lifecycle
+# TODO — LoopJob per-job loop control flow
 
-- [ ] git checkout -b feat/strip-meta-agent
-- [ ] bump @gonzih/cc-wire from ^0.1.6 to ^0.3.0 in package.json
-- [ ] delete src/meta-agent.ts
-- [ ] delete src/meta-agent.test.ts
-- [ ] update src/cron.ts — remove metaAgentManager import, simplify fire() to always use manager.spawn()
-- [ ] update src/cron.test.ts — remove meta-agent mock, update repoUrl routing test
-- [ ] update src/index.ts — remove MetaAgentManager import, instance, 4 tool defs, 4 case handlers, startPoller() call
+- [x] Read PLAN.md, understand codebase
+- [ ] git checkout -b feat/loop-job
+- [ ] src/types.ts — add loop_exhausted/loop_stalled to JobStatus, GateFailure interface, loop fields to SpawnOptions and Job
+- [ ] src/store.ts — add loop fields to JobRecord
+- [ ] src/loop.ts — NEW: LoopEngine class with runLoopGates(), runCompletionGate(), runQualityGate(), hash helpers
+- [ ] src/agent.ts — add loop fields to toRecord/fromRecord; call runLoopGates() in run() after success
+- [ ] src/index.ts — add completion_criteria, quality_rubric, goal, max_iterations to spawn_agent schema
+- [ ] src/loop.test.ts — NEW: comprehensive tests
 - [ ] npm install && npm test
-- [ ] git add + diff review + commit + push
-- [ ] gh pr create + merge
-- [ ] npm version minor && git push --follow-tags && npm publish --access public
+- [ ] git add + diff review + commit
+- [ ] gh pr create + merge + publish

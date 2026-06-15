@@ -1,32 +1,49 @@
-# Plan: Strip meta-agent lifecycle — cc-agent becomes a pure job runner
+# Plan: LoopJob — per-job loop control flow with gate-based re-prompt
 
 ## Task restated
-cc-discord now owns meta-agent processes directly. cc-agent's job is solely `spawn_agent` —
-running code tasks in temporary workspaces. This PR removes all meta-agent lifecycle code:
-polling loops, process management, workspace cloning for persistent sessions, and the four
-MCP tools that exposed this functionality. It also upgrades @gonzih/cc-wire from 0.1.6 to 0.3.0.
+Add a LoopJob type and loop execution engine. When a worker job finishes, three structured
+gates run before declaring success. On gate failure the worker is re-spawned with structured
+feedback. Opt-in via `completion_criteria` in the spawn request.
 
 ## Approaches considered
 
-1. **Delete meta-agent.ts, update all consumers** — clean break, leaves cron routing changed.
-2. **Keep meta-agent.ts but stub all methods** — less clean, dead code.
-3. **Deprecation shim** — unnecessary, this is a breaking minor bump.
+1. **New loop controller job type** — caller spawns a "controller" job that in turn manages
+   worker jobs. Clean separation but requires a new entity type and complex lifecycle.
+2. **Integrate into JobManager.run() directly** — check gates inline in the run() method
+   after a job finishes; re-call run() with updated task on failure. Minimal new surface area,
+   uses existing retry pattern, but makes run() even larger.
+3. **Separate LoopEngine in loop.ts called from run()** — extracted helper class, called from
+   run() after success. Clean separation, easily testable, no new entity type.
 
-**Chosen: Approach 1.** Delete meta-agent.ts and meta-agent.test.ts entirely. Update cron.ts
-to route crons with repoUrl through manager.spawn() instead. Remove all MCP tool definitions
-and handlers. Clean, no dead code.
+**Chosen: Approach 3.** `loop.ts` contains all gate logic; `agent.ts` calls it at the right
+point in the lifecycle. Existing one-shot jobs are completely unaffected.
 
 ## Files to touch
-- `src/meta-agent.ts` — DELETE
-- `src/meta-agent.test.ts` — DELETE
-- `src/index.ts` — remove MetaAgentManager import, instance, 4 tool defs, 4 case handlers, startPoller() call
-- `src/cron.ts` — remove metaAgentManager import/usage; route repoUrl crons via manager.spawn()
-- `src/cron.test.ts` — update cron-with-repoUrl test to check manager.spawn, remove meta-agent mock
-- `package.json` — bump @gonzih/cc-wire ^0.1.6 → ^0.3.0
+- `src/types.ts` — add JobStatus `loop_exhausted`/`loop_stalled`, `GateFailure` interface,
+  loop fields to `SpawnOptions` and `Job`
+- `src/loop.ts` — NEW: LoopEngine with three gate implementations
+- `src/loop.test.ts` — NEW: comprehensive tests for all gates
+- `src/agent.ts` — call runLoopGates() after successful run; add loop fields to toRecord/fromRecord
+- `src/store.ts` — add loop fields to JobRecord
+- `src/index.ts` — add loop params to spawn_agent tool input schema
+
+## Key design decisions
+- Loop state is stored ON the job itself (iteration, gateFailures, loopOutputHash, goal,
+  completionCriteria, qualityRubric, maxIterations). No separate entity.
+- Re-iteration = re-call run() with `job.workDir = undefined` (forces fresh clone) and
+  `job.task` augmented with gate feedback.
+- Quality gate spawns eval agent via manager.spawn(); waits for completion via polling.
+  Eval agent returns `GATE_EVAL: {...json...}` line in output.
+- Completion gate: run each criterion as `sh -c <cmd>` in workDir; any non-zero = fail.
+- Reality gate: skipped gracefully (no-op) unless a repoContext defines a check command.
+  For now, always passes (spec says "skip gracefully when no check defined").
+- No-progress detection: sha256 of last 50 output lines. If two consecutive hashes match
+  → `loop_stalled`.
+- Max iterations hard cap: 3.
+- Loop exhausted → status `loop_exhausted` → coordinator notifies for human hand-off.
 
 ## Risks
-- cron.test.ts test "fires cron with repoUrl via metaAgentManager.messageMetaAgent" must be updated
-- chatIncomingChannel/chatOutgoingChannel still used in get_pubsub_status — keep those imports
-- CC_AGENT_VERSION_KEY still used in index.ts — keep that import
-- After removing the meta-agent routing from cron.ts, crons with repoUrl go to spawn_agent;
-  the cron.test.ts mock for meta-agent.js must be removed
+- Recursive run() calls need careful stack management (same as existing retry pattern — OK)
+- Eval agent needs to complete before re-spawning: use `await waitForJob()` with timeout
+- workDir deletion (deferred 10min) means the previous iteration's dir lives briefly after
+  we force a re-clone; this is fine — rm is deferred and paths are unique per clone
