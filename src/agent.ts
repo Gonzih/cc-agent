@@ -404,16 +404,16 @@ export class JobManager {
     setInterval(() => this.checkRestoredRunning(), 30 * 1000).unref();
     // Dependency scheduler — promote pending jobs when deps are done
     setInterval(() => this.tick(), DEPENDENCY_TICK_MS).unref();
-    // Kill all active claude subprocesses and clean up Docker containers on process exit
+    // Only kill jobs on SIGINT (intentional user shutdown).
+    // SIGTERM = MCP server restart — jobs are detached (detached:true + unref) and should survive.
+    // No exit handler: avoids killing detached jobs on crash/restart.
     const killAll = () => {
       for (const [, kill] of this.kills) {
         try { kill(); } catch {}
       }
     };
     const cleanup = () => { killAll(); void this.cleanupDockerContainers(); };
-    process.once("SIGTERM", cleanup);
     process.once("SIGINT", cleanup);
-    process.once("exit", killAll);
   }
 
   /** Must be called after initRedis() at startup. */
