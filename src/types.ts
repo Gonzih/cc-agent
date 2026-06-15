@@ -29,6 +29,7 @@ export interface JobEvent {
   coordinatorPlan?: CoordinatorPlan;
   spawningNamespace?: string; // namespace of the caller that spawned this job
   cronId?: string;        // set when this job was spawned by a cron trigger
+  chatId?: number;        // Discord/Telegram chat ID for notification routing
 }
 
 export interface OnComplete {
@@ -106,6 +107,7 @@ export interface Job {
   effortLevel?: EffortLevel;   // /effort command level: low|medium|high|xhigh|max|auto
   fastMode?: boolean;          // if true, prepend /fast command at session start
   spawningNamespace?: string;  // namespace of the caller that spawned this job (for notification routing)
+  chatId?: number;             // Discord/Telegram chat ID to route completion notification back
   // LoopJob fields
   goal?: string;               // verifiable intent — what "done" looks like
   completionCriteria?: string[]; // deterministic shell checks run after worker finishes
@@ -151,6 +153,7 @@ export interface SpawnOptions {
   effortLevel?: EffortLevel;   // /effort command level: low|medium|high|xhigh|max|auto
   fastMode?: boolean;          // if true, prepend /fast command at session start
   spawningNamespace?: string;  // namespace of the caller (routes completion notification back to caller)
+  chatId?: number;             // Discord/Telegram chat ID to route completion notification back
   // LoopJob fields
   goal?: string;               // verifiable intent — what "done" looks like
   completionCriteria?: string[]; // deterministic shell checks run after worker finishes

@@ -90,6 +90,7 @@ export interface JobRecord {
   effortLevel?: EffortLevel;
   fastMode?: boolean;
   spawningNamespace?: string;
+  chatId?: number;
   // LoopJob fields
   goal?: string;
   completionCriteria?: string[];

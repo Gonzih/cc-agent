@@ -1,13 +1,12 @@
-# TODO — LoopJob per-job loop control flow
+# TODO — Wire chat_id through spawn_agent → coordinator notifications
 
-- [x] Read PLAN.md, understand codebase
-- [ ] git checkout -b feat/loop-job
-- [ ] src/types.ts — add loop_exhausted/loop_stalled to JobStatus, GateFailure interface, loop fields to SpawnOptions and Job
-- [ ] src/store.ts — add loop fields to JobRecord
-- [ ] src/loop.ts — NEW: LoopEngine class with runLoopGates(), runCompletionGate(), runQualityGate(), hash helpers
-- [ ] src/agent.ts — add loop fields to toRecord/fromRecord; call runLoopGates() in run() after success
-- [ ] src/index.ts — add completion_criteria, quality_rubric, goal, max_iterations to spawn_agent schema
-- [ ] src/loop.test.ts — NEW: comprehensive tests
+- [x] Read existing code and plan
+- [ ] git checkout -b feat/chat-id-routing
+- [ ] src/types.ts — add chatId to Job, SpawnOptions, JobEvent
+- [ ] src/store.ts — add chatId to JobRecord
+- [ ] src/agent.ts — spawn() assigns chatId; toRecord/fromRecord; publishJobEvent xadd + JobEvent
+- [ ] src/index.ts — pass chatId in spawn_agent case; add chat_id to inputSchema
+- [ ] src/coordinator.ts — parseStreamEntry + processEvent
 - [ ] npm install && npm test
 - [ ] git add + diff review + commit
 - [ ] gh pr create + merge + publish

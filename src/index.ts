@@ -229,6 +229,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             description:
               "Namespace of the caller (e.g. 'simorgh-mobile-app'). When set, job completion notifications are routed to cca:notify:{spawning_namespace} instead of the server's default namespace. Use this when spawning from a meta-agent so the completion signal returns to your namespace.",
           },
+          chat_id: {
+            type: "number",
+            description:
+              "Discord/Telegram chat ID to include in the completion notification payload. When set, cc-discord routes the notification back to the originating channel.",
+          },
           goal: {
             type: "string",
             description:
@@ -1025,6 +1030,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         effortLevel: a.effort_level as EffortLevel | undefined,
         fastMode: a.fast_mode === true,
         spawningNamespace: (a.spawning_namespace as string | undefined) ?? process.env.CC_AGENT_NAMESPACE ?? namespace,
+        chatId: typeof a.chat_id === "number" && a.chat_id !== 0 ? a.chat_id : undefined,
         goal: a.goal as string | undefined,
         completionCriteria: a.completion_criteria as string[] | undefined,
         qualityRubric: a.quality_rubric as string | undefined,
