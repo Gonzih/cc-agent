@@ -1,6 +1,12 @@
 import type { Writable } from "stream";
 
-export type JobStatus = "pending" | "cloning" | "running" | "done" | "failed" | "cancelled" | "sleeping" | "pending_approval" | "rejected" | "interrupted";
+export type JobStatus = "pending" | "cloning" | "running" | "done" | "failed" | "cancelled" | "sleeping" | "pending_approval" | "rejected" | "interrupted" | "loop_exhausted" | "loop_stalled";
+
+export interface GateFailure {
+  gate: "completion" | "reality" | "quality";
+  reason: string;
+  iteration: number;
+}
 
 export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max" | "auto";
 
@@ -98,6 +104,15 @@ export interface Job {
   effortLevel?: EffortLevel;   // /effort command level: low|medium|high|xhigh|max|auto
   fastMode?: boolean;          // if true, prepend /fast command at session start
   spawningNamespace?: string;  // namespace of the caller that spawned this job (for notification routing)
+  // LoopJob fields
+  goal?: string;               // verifiable intent — what "done" looks like
+  completionCriteria?: string[]; // deterministic shell checks run after worker finishes
+  qualityRubric?: string;      // prompt injected into quality eval agent
+  maxIterations?: number;      // hard cap on loop iterations (default 3, max 3)
+  iteration?: number;          // current loop iteration, starting at 1
+  evalAgentId?: string;        // job ID of the most recent quality eval agent
+  gateFailures?: GateFailure[]; // full trace of gate failures across iterations
+  loopOutputHash?: string;     // sha256 of last iteration's output (for stall detection)
 }
 
 export interface SpawnOptions {
@@ -133,6 +148,11 @@ export interface SpawnOptions {
   effortLevel?: EffortLevel;   // /effort command level: low|medium|high|xhigh|max|auto
   fastMode?: boolean;          // if true, prepend /fast command at session start
   spawningNamespace?: string;  // namespace of the caller (routes completion notification back to caller)
+  // LoopJob fields
+  goal?: string;               // verifiable intent — what "done" looks like
+  completionCriteria?: string[]; // deterministic shell checks run after worker finishes
+  qualityRubric?: string;      // prompt injected into quality eval agent
+  maxIterations?: number;      // hard cap on loop iterations (default 3, max 3)
 }
 
 // ─── Workflow types ───────────────────────────────────────────────────────────

@@ -229,6 +229,27 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             description:
               "Namespace of the caller (e.g. 'simorgh-mobile-app'). When set, job completion notifications are routed to cca:notify:{spawning_namespace} instead of the server's default namespace. Use this when spawning from a meta-agent so the completion signal returns to your namespace.",
           },
+          goal: {
+            type: "string",
+            description:
+              "LoopJob: verifiable intent — what 'done' looks like. Required when completion_criteria is set. Injected into the quality eval agent prompt.",
+          },
+          completion_criteria: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "LoopJob: list of shell commands run after the worker finishes. Each command runs in the cloned repo directory. All must exit 0 for the completion gate to pass. Presence of this field opts the job into the loop engine.",
+          },
+          quality_rubric: {
+            type: "string",
+            description:
+              "LoopJob: rubric injected into the quality eval agent. Describes what good output looks like. If omitted, quality gate is skipped.",
+          },
+          max_iterations: {
+            type: "number",
+            description:
+              "LoopJob: maximum number of worker iterations before declaring loop_exhausted. Default 3. Hard cap 3.",
+          },
           coordinator_plan: {
             type: "object",
             description: "Optional plan for cc-tg coordinator. If set, cc-tg will spawn the nextStep when this job completes.",
@@ -1004,6 +1025,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         effortLevel: a.effort_level as EffortLevel | undefined,
         fastMode: a.fast_mode === true,
         spawningNamespace: (a.spawning_namespace as string | undefined) ?? process.env.CC_AGENT_NAMESPACE ?? namespace,
+        goal: a.goal as string | undefined,
+        completionCriteria: a.completion_criteria as string[] | undefined,
+        qualityRubric: a.quality_rubric as string | undefined,
+        maxIterations: a.max_iterations as number | undefined,
       });
 
       if (a.coordinator_plan) {
@@ -1107,6 +1132,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
               score_source: job.scoreSource ?? null,
               spawning_namespace: job.spawningNamespace ?? null,
               pub_sub_channel: jobDoneChannel(job.id),
+              loop_iteration: job.iteration ?? null,
+              loop_gate_failures: job.gateFailures ?? null,
+              loop_eval_agent_id: job.evalAgentId ?? null,
             }),
           },
         ],
@@ -1118,7 +1146,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       const timeoutSeconds = typeof a.timeout_seconds === "number" ? a.timeout_seconds : 300;
       logger.info("[mcp] wait_for_job", { job_id: waitJobId, timeout_seconds: timeoutSeconds });
 
-      const TERMINAL_STATUSES = new Set(["done", "failed", "cancelled", "rejected", "interrupted"]);
+      const TERMINAL_STATUSES = new Set(["done", "failed", "cancelled", "rejected", "interrupted", "loop_exhausted", "loop_stalled"]);
       const deadlineMs = Date.now() + timeoutSeconds * 1000;
 
       let waitRecord = await jobStore.getJob(waitJobId);

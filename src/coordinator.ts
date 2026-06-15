@@ -155,8 +155,8 @@ export class Coordinator {
       }
     }
 
-    if (status === "done" || status === "failed") {
-      const icon = status === "done" ? "✅" : "❌";
+    if (status === "done" || status === "failed" || status === "loop_exhausted" || status === "loop_stalled") {
+      const icon = status === "done" ? "✅" : (status === "loop_exhausted" || status === "loop_stalled") ? "⚠️" : "❌";
       // Parse org/repo from repoUrl (e.g. https://github.com/gonzih/cc-tg → gonzih/cc-tg)
       let repoShort = repoUrl;
       try {

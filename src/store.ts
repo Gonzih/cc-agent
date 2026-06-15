@@ -90,6 +90,15 @@ export interface JobRecord {
   effortLevel?: EffortLevel;
   fastMode?: boolean;
   spawningNamespace?: string;
+  // LoopJob fields
+  goal?: string;
+  completionCriteria?: string[];
+  qualityRubric?: string;
+  maxIterations?: number;
+  iteration?: number;
+  evalAgentId?: string;
+  gateFailures?: import("./types.js").GateFailure[];
+  loopOutputHash?: string;
 }
 
 export class JobStore {
