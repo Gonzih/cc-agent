@@ -144,9 +144,15 @@ describe("rotateToken", () => {
 // ─── getTokenStatus ──────────────────────────────────────────────────────────
 
 describe("getTokenStatus", () => {
-  it("reports allExhausted=true when no tokens configured", async () => {
+  it("reports allExhausted=true when no tokens configured and no master token", async () => {
     const s = await getTokenStatus();
     expect(s).toEqual({ index: 0, total: 0, allExhausted: true });
+  });
+
+  it("reports total=1, allExhausted=false when master token is set in Redis", async () => {
+    mockRedisStore.set(MASTER_TOKEN_KEY, "sk-ant-redis-master");
+    const s = await getTokenStatus();
+    expect(s).toEqual({ index: 0, total: 1, allExhausted: false });
   });
 
   it("reports not exhausted at counter 0", async () => {
@@ -284,9 +290,14 @@ describe("getMasterToken", () => {
 });
 
 describe("getCurrentToken - boundary conditions", () => {
-  it("returns empty string when no tokens are configured", async () => {
+  it("returns empty string when no tokens are configured and no master token in Redis", async () => {
     expect(await getCurrentToken()).toBe("");
-    expect(mockRedis.get).not.toHaveBeenCalled();
+  });
+
+  it("falls back to Redis master token when env tokens are absent", async () => {
+    mockRedisStore.set(MASTER_TOKEN_KEY, "sk-ant-redis-master");
+    expect(await getCurrentToken()).toBe("sk-ant-redis-master");
+    expect(mockRedis.get).toHaveBeenCalledWith(MASTER_TOKEN_KEY);
   });
 
   it("handles non-numeric Redis counter value by treating it as 0", async () => {

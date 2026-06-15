@@ -28,7 +28,7 @@ export function loadTokens(): string[] {
 /** Get the token at the current Redis index (cca:token:index). */
 export async function getCurrentToken(): Promise<string> {
   const tokens = loadTokens();
-  if (tokens.length === 0) return "";
+  if (tokens.length === 0) return getMasterToken();
   if (tokens.length === 1) return tokens[0];
 
   const redis = getRedis();
@@ -61,7 +61,11 @@ export async function rotateToken(): Promise<string> {
 export async function getTokenStatus(): Promise<TokenStatus> {
   const tokens = loadTokens();
   const total = tokens.length;
-  if (total === 0) return { index: 0, total: 0, allExhausted: true };
+  if (total === 0) {
+    const master = await getMasterToken();
+    if (master) return { index: 0, total: 1, allExhausted: false };
+    return { index: 0, total: 0, allExhausted: true };
+  }
 
   const redis = getRedis();
   let counter = 0;
