@@ -8,6 +8,7 @@ export interface SpawnOptions {
   continueSession?: boolean;
   sessionId?: string;
   model?: string;
+  jobId?: string;    // used for deterministic log file naming
   /** Additional env vars merged over process.env before spawning. */
   env?: Record<string, string>;
 }

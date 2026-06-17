@@ -6,7 +6,9 @@ import { join } from "path";
 import { promisify } from "util";
 import { v4 as uuidv4 } from "uuid";
 import { getDriver } from "./drivers/index.js";
+import { tailLogFile } from "./claude.js";
 import type { UsageEvent as DriverUsageEvent } from "./drivers/types.js";
+import type { UsageEvent } from "./claude.js";
 import { injectPreamble, getPreambleText, BROWSER_HINT, CODE_QUALITY_CHECKLIST, isCodeTask } from "./preamble.js";
 import type { Job, JobSummary, SpawnOptions, JobEvent, CoordinatorPlan, EffortLevel } from "./types.js";
 import { runLoopGates, LOOP_MAX_ITERATIONS } from "./loop.js";
@@ -20,6 +22,7 @@ import { getRedis } from "./redis.js";
 import { injectMcpConfig, repoKeyFromUrl } from "./mcp-inject.js";
 import {
   jobOutputKey,
+  jobLogOffsetKey,
   coordinatorPlanKey,
   EVENT_STREAM,
   jobDoneChannel,
@@ -275,6 +278,7 @@ function toRecord(job: Job): JobRecord {
     exitCode: job.exitCode,
     error: job.error,
     pid: job.pid,
+    logPath: job.logPath,
     sessionIdAfter: job.sessionIdAfter,
     usage: job.usage,
     totalInputTokens: job.totalInputTokens,
@@ -337,6 +341,7 @@ function fromRecord(r: JobRecord): Job {
     startedAt: new Date(r.startedAt ?? Date.now()),
     finishedAt: r.finishedAt ? new Date(r.finishedAt) : undefined,
     pid: r.pid,
+    logPath: r.logPath,
     sessionIdAfter: r.sessionIdAfter,
     usage: r.usage,
     totalInputTokens: r.totalInputTokens,
@@ -453,8 +458,15 @@ export class JobManager {
             interruptedAt = interruptedAt ?? new Date().toISOString();
             orphanCount++;
           }
+        } else if (r.logPath) {
+          // PID alive AND we have a log file — re-attach tail poller after init completes
+          const snapR = { ...r };
+          setImmediate(() => {
+            const aliveJob = this.jobs.get(snapR.id);
+            if (aliveJob?.logPath) this.reattachLogPoller(aliveJob);
+          });
         }
-        // else: process is alive — keep as running (owned by sibling cc-agent instance)
+        // else: process is alive, no log file — keep as running (old pipe-based job)
       }
       // sleeping jobs survive restarts — wake timer is rescheduled below
 
@@ -522,6 +534,73 @@ export class JobManager {
         }
       }
     }
+  }
+
+  private async reattachLogPoller(job: Job): Promise<void> {
+    if (!job.logPath || !job.pid) return;
+
+    const redis = getRedis();
+    let initialOffset = 0;
+    if (redis) {
+      try {
+        const stored = await redis.get(jobLogOffsetKey(job.id));
+        if (stored) initialOffset = parseInt(stored, 10) || 0;
+      } catch { /* redis unavailable */ }
+    }
+
+    logger.info("[job] reattach-log-poller", { id: job.id, pid: job.pid, logPath: job.logPath, offset: initialOffset });
+
+    const tail = tailLogFile(job.logPath, initialOffset, job.pid);
+
+    tail.on("text", (text: string) => {
+      this.addOutput(job, text);
+      // Persist offset periodically (every ~10 lines)
+      if (redis && job.output.length % 10 === 0) {
+        redis.set(jobLogOffsetKey(job.id), String(job.output.length)).catch(() => {});
+      }
+    });
+
+    tail.on("tool", (name: string) => {
+      job.toolCalls.push(name);
+      if (job.toolCalls.length > 50) job.toolCalls = job.toolCalls.slice(-50);
+      this.publishJobEvent(job);
+    });
+
+    tail.on("usage", (u: UsageEvent) => {
+      job.totalInputTokens = (job.totalInputTokens ?? 0) + u.inputTokens;
+      job.totalOutputTokens = (job.totalOutputTokens ?? 0) + u.outputTokens;
+      if (u.cacheReadTokens) job.totalCacheReadTokens = (job.totalCacheReadTokens ?? 0) + u.cacheReadTokens;
+      if (u.cacheWriteTokens) job.totalCacheWriteTokens = (job.totalCacheWriteTokens ?? 0) + u.cacheWriteTokens;
+      if (u.costUsd) job.costUsd = (job.costUsd ?? 0) + u.costUsd;
+      this.persistJob(job);
+    });
+
+    tail.on("session", (sid: string) => {
+      if (!job.sessionIdAfter) {
+        job.sessionIdAfter = sid;
+        this.persistJob(job);
+      }
+    });
+
+    tail.on("exit", (_code: number | null) => {
+      this.kills.delete(job.id);
+      this.restoredJobs.delete(job.id);
+      // Check last output lines for clean completion
+      const lastLines = job.output.slice(-5).join("\n");
+      const looksCompleted = /Done\. Exit code:\s*0/i.test(lastLines);
+      if (looksCompleted) {
+        job.status = "done";
+      } else {
+        job.status = "interrupted";
+        job.error = (job.error ? job.error + "; " : "") + "Process exited during reattached log poll";
+      }
+      job.finishedAt = new Date();
+      this.persistJob(job);
+      this.publishJobEvent(job);
+      if (redis) redis.del(jobLogOffsetKey(job.id)).catch(() => {});
+    });
+
+    this.kills.set(job.id, () => tail.kill());
   }
 
   private persistJob(job: Job): void {
@@ -973,11 +1052,14 @@ export class JobManager {
           continueSession: isResume || !!job.continueSession,
           sessionId: job.sessionId,
           model: job.model ?? job.agentModel,
+          jobId: job.id,
           env: Object.keys(driverEnv).length > 0 ? driverEnv : undefined,
         });
 
         if (agentProc.pid != null) {
           job.pid = agentProc.pid;
+          const lp = (agentProc as unknown as { logPath?: string }).logPath;
+          if (lp) job.logPath = lp;
           this.persistJob(job);
         }
         logger.info("[spawn] subprocess started", { job_id: job.id, pid: agentProc.pid ?? null, cwd: workDir, driver: driverName });

@@ -47,6 +47,7 @@ export class ClaudeCodeDriver implements AgentDriver {
       model: options.model,
       ollamaModel,
       ollamaHost,
+      jobId: options.jobId,
     });
 
     // Adapt OneShot interface → AgentProcess interface
@@ -65,6 +66,8 @@ export class ClaudeCodeDriver implements AgentDriver {
     proc.on("exit", (code: number | null) => emitter.emit("exit", code));
 
     emitter.pid = proc.pid;
+    const lp = (proc as unknown as { logPath?: string }).logPath;
+    if (lp) (emitter as unknown as { logPath?: string }).logPath = lp;
 
     emitter.kill = (signal?: string) => {
       void signal; // ClaudeCodeDriver always SIGTERMs the process group

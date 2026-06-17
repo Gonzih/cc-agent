@@ -55,6 +55,7 @@ export interface JobRecord {
   exitCode?: number;
   error?: string;
   pid?: number;
+  logPath?: string;         // path to stdout log file (file-based I/O for process survival)
   sessionIdAfter?: string;
   usage?: TokenUsage;
   totalInputTokens?: number;
