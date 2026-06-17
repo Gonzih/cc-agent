@@ -61,6 +61,7 @@ export interface Job {
   startedAt: Date;
   finishedAt?: Date;
   pid?: number;
+  logPath?: string;         // path to stdout log file (file-based I/O for process survival)
   stdinStream?: Writable | null;
   continueSession?: boolean;
   maxBudgetUsd?: number;
