@@ -9,6 +9,7 @@ const {
   mockGetRedis,
   mockRedisPublish,
   mockRedisLpush,
+  mockRedisRpush,
   mockRedisLtrim,
   mockRedisXreadgroup,
   mockRedisXgroup,
@@ -16,6 +17,7 @@ const {
 } = vi.hoisted(() => {
   const mockRedisPublish = vi.fn(async () => 0);
   const mockRedisLpush = vi.fn(async () => 1);
+  const mockRedisRpush = vi.fn(async () => 1);
   const mockRedisLtrim = vi.fn(async () => "OK" as string);
   const mockRedisXreadgroup = vi.fn(async () => null as null | [string, [string, string[]][]][]);
   const mockRedisXgroup = vi.fn(async () => "OK" as string);
@@ -23,6 +25,7 @@ const {
   const mockRedisFull = {
     publish: mockRedisPublish,
     lpush: mockRedisLpush,
+    rpush: mockRedisRpush,
     ltrim: mockRedisLtrim,
     xreadgroup: mockRedisXreadgroup,
     xgroup: mockRedisXgroup,
@@ -32,6 +35,7 @@ const {
     mockGetRedis: vi.fn(() => mockRedisFull as typeof mockRedisFull | null),
     mockRedisPublish,
     mockRedisLpush,
+    mockRedisRpush,
     mockRedisLtrim,
     mockRedisXreadgroup,
     mockRedisXgroup,
@@ -164,6 +168,17 @@ describe("Coordinator", () => {
     expect(mockRedisPublish).toHaveBeenCalledWith(
       "cca:notify:test-ns",
       JSON.stringify({ text: "❌ test/repo · job-1\nMy Job" }),
+    );
+  });
+
+  // Test 4a: notifyPayload also rpushes to discordNotify list for polling delivery
+  it("rpushes payload to discordNotify list for cc-discord polling", async () => {
+    const event = makeEvent({ status: "done", title: "My Task", repoUrl: "https://github.com/test/repo" });
+    await coordinator.processEvent(event);
+
+    expect(mockRedisRpush).toHaveBeenCalledWith(
+      "cca:discord:notify:test-ns",
+      JSON.stringify({ text: "✅ test/repo · job-1\nMy Task" }),
     );
   });
 

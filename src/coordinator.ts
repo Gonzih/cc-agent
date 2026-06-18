@@ -16,6 +16,7 @@ import {
   COORDINATOR_GROUP,
   notifyChannel,
   notifyLogKey,
+  discordNotify,
   type NotificationPayload,
 } from "@gonzih/cc-wire";
 
@@ -44,6 +45,7 @@ export async function notifyPayload(namespace: string, payload: Record<string, u
   const payloadStr = JSON.stringify(payload);
   try {
     await redis.publish(notifyChannel(namespace), payloadStr);
+    await redis.rpush(discordNotify(namespace), payloadStr);
     await redis.lpush(notifyLogKey(namespace), payloadStr);
     await redis.ltrim(notifyLogKey(namespace), 0, 99);
   } catch (err) {
