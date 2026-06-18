@@ -55,14 +55,29 @@ export function injectMcpConfig(cwd: string, namespace: string): void {
     }
   }
 
-  config.mcpServers["cc-agent"] = {
-    command: "npx",
-    args: ["@gonzih/cc-agent"],
-    env: {
-      CC_AGENT_NAMESPACE: namespace,
-      CLAUDE_CODE_OAUTH_TOKEN: token,
-      PATH: process.env.PATH ?? "",
+  // Rebuild mcpServers with gitkb first, then cc-agent, then any pre-existing entries
+  const existing = { ...config.mcpServers };
+  delete existing["gitkb"];
+  delete existing["cc-agent"];
+
+  config.mcpServers = {
+    gitkb: {
+      command: "/opt/homebrew/bin/git-kb",
+      args: ["mcp"],
+      env: {
+        GITKB_ROOT: "/Users/feral/cc-discord-workspace/money-brain",
+      },
     },
+    "cc-agent": {
+      command: "npx",
+      args: ["@gonzih/cc-agent"],
+      env: {
+        CC_AGENT_NAMESPACE: namespace,
+        CLAUDE_CODE_OAUTH_TOKEN: token,
+        PATH: process.env.PATH ?? "",
+      },
+    },
+    ...existing,
   };
 
   try {
