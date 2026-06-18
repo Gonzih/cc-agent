@@ -20,6 +20,7 @@ import { isDockerAvailable, runDockerAgent, getDockerEnv } from "./docker.js";
 import { getCurrentToken, rotateToken, getTokenStatus, resetTokens } from "./tokens.js";
 import { getRedis } from "./redis.js";
 import { injectMcpConfig, repoKeyFromUrl } from "./mcp-inject.js";
+import { notifyPayload } from "./coordinator.js";
 import {
   jobOutputKey,
   jobLogOffsetKey,
@@ -519,6 +520,18 @@ export class JobManager {
                 this.jobs.set(id, resolved);
                 this.restoredJobs.delete(id);
                 logger.info("[job] synced-from-redis", { id, status: current.status });
+                if ((resolved.status === "done" || resolved.status === "failed") && !resolved.cronId) {
+                  const targetNamespace = resolved.spawningNamespace ?? getNamespace();
+                  const icon = resolved.status === "done" ? "✅" : "❌";
+                  const repo = resolved.repoUrl?.replace("https://github.com/", "") ?? resolved.repoUrl ?? "unknown";
+                  const scoreStr = resolved.score != null ? ` · ${resolved.score.toFixed(2)}` : "";
+                  const shortId = resolved.id.slice(0, 8);
+                  const titleLine = resolved.task?.slice(0, 160) ?? "";
+                  notifyPayload(targetNamespace, {
+                    text: `${icon} ${repo}${scoreStr} · ${shortId}\n${titleLine}`,
+                    chat_id: resolved.chatId ?? 0,
+                  }).catch(() => {});
+                }
                 return;
               }
             } catch { /* ignore — fall through to interrupt */ }
