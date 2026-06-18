@@ -968,7 +968,7 @@ export class JobManager {
         if (job.branch && !job.createBranch) cloneArgs.push("--branch", job.branch);
         cloneArgs.push(job.repoUrl, workDir);
 
-        await execFileAsync("git", cloneArgs);
+        await execFileAsync("git", cloneArgs, { env: { ...process.env, GIT_LFS_SKIP_SMUDGE: "1" } });
         this.addOutput(job, `[cc-agent] Cloned to ${workDir}`);
 
         // 2. Create branch if requested
