@@ -15,7 +15,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:docker": "vitest run --config vitest.integration.config.ts",
-    "test:integration": "node --experimental-strip-types --loader ./tests/integration/ts-loader.mjs --test tests/integration/docker.test.ts tests/integration/job-lifecycle.test.ts tests/integration/credentials.test.ts"
+    "test:integration": "CLAUDE_BIN=./test/fixtures/mock-claude.js node --experimental-strip-types --loader ./tests/integration/ts-loader.mjs --test tests/integration/docker.test.ts tests/integration/job-lifecycle.test.ts tests/integration/credentials.test.ts tests/integration/claude-mock.test.ts"
   },
   "files": [
     "dist/"

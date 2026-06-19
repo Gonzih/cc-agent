@@ -81,6 +81,15 @@ describe("extractText", () => {
 });
 
 describe("resolveClaude", () => {
+  it("returns CLAUDE_BIN env var when set, without disk check", () => {
+    const origBin = process.env.CLAUDE_BIN;
+    process.env.CLAUDE_BIN = "/test/mock/claude";
+    const result = resolveClaude();
+    expect(result).toBe("/test/mock/claude");
+    if (origBin === undefined) delete process.env.CLAUDE_BIN;
+    else process.env.CLAUDE_BIN = origBin;
+  });
+
   it("returns path from PATH when claude binary exists there", () => {
     const origPath = process.env.PATH;
     process.env.PATH = "/usr/bin:/custom/bin";
