@@ -356,6 +356,7 @@ function extractToolName(msg: ClaudeMessage): string | null {
 }
 
 export function resolveClaude(): string {
+  if (process.env.CLAUDE_BIN) return process.env.CLAUDE_BIN;
   const dirs = (process.env.PATH ?? "").split(":");
   for (const dir of dirs) {
     const c = `${dir}/claude`;
