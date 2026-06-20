@@ -1,24 +1,24 @@
 /**
- * Coordinator — reads from the Redis Stream and:
- *   - Spawns onComplete / coordinator_plan follow-up jobs on done events
- *   - Publishes failure / low-score notifications to cca:notify:<namespace>
+ * Coordinator — reads from the Redis Stream and publishes job completion
+ * notifications to cca:notify:<namespace> and cca:discord:notify:<namespace>.
  *
  * Uses XREADGROUP with consumer group "coordinator" for reliable delivery.
  * MKSTREAM ensures the stream exists before any producers write to it.
  */
 
-import type { JobManager } from "./agent.js";
-import type { CoordinatorPlan, JobEvent } from "./types.js";
+import type { JobEvent } from "./types.js";
 import { getRedis } from "./redis.js";
 import { logger } from "./logger.js";
 import {
   EVENT_STREAM as STREAM_KEY,
-  COORDINATOR_GROUP,
   notifyChannel,
   notifyLogKey,
   discordNotify,
   type NotificationPayload,
 } from "@gonzih/cc-wire";
+
+/** Consumer group name for reading the event stream. */
+const COORDINATOR_GROUP = "coordinator";
 
 const COORDINATOR_POLL_MS = 2000;
 const LOW_SCORE_THRESHOLD = 0.5;
@@ -57,7 +57,7 @@ export class Coordinator {
   private running = false;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(private manager: JobManager, private namespace: string) {}
+  constructor(private namespace: string) {}
 
   async start(): Promise<void> {
     if (this.running) return;
@@ -162,14 +162,7 @@ export class Coordinator {
   }
 
   async processEvent(event: JobEvent): Promise<void> {
-    const { jobId, status, title, repoUrl, score, coordinatorPlan, spawningNamespace, cronId, chatId } = event;
-
-    if (status === "done") {
-      // 1. Coordinator plan — spawn follow-up job if configured
-      if (coordinatorPlan?.next_step) {
-        await this.spawnNext(jobId, title, repoUrl, coordinatorPlan);
-      }
-    }
+    const { jobId, status, title, repoUrl, score, spawningNamespace, cronId, chatId } = event;
 
     if (status === "done" || status === "failed" || status === "loop_exhausted" || status === "loop_stalled") {
       const icon = status === "done" ? "✅" : (status === "loop_exhausted" || status === "loop_stalled") ? "⚠️" : "❌";
@@ -202,30 +195,7 @@ export class Coordinator {
     }
   }
 
-  private async spawnNext(
-    parentJobId: string,
-    parentTitle: string,
-    parentRepoUrl: string,
-    plan: CoordinatorPlan,
-  ): Promise<void> {
-    const next = plan.next_step!;
-    try {
-      const childId = await this.manager.spawn({
-        repoUrl: next.repo_url,
-        task: next.task,
-      });
-      logger.info("[coordinator] job done → spawning next", {
-        parentJobId,
-        childId,
-        nextRepo: next.repo_url,
-      });
-    } catch (err) {
-      logger.warn("coordinator:spawn-next-failed", {
-        parentJobId,
-        err: String(err),
-      });
-    }
-  }
+
 }
 
 // ---------------------------------------------------------------------------
@@ -247,9 +217,6 @@ function parseStreamEntry(fields: string[]): JobEvent {
     score: obj.score ? parseFloat(obj.score) : undefined,
     // Protocol: timestamp is ISO 8601 string
     timestamp: obj.timestamp ?? new Date().toISOString(),
-    coordinatorPlan: obj.coordinatorPlan
-      ? (JSON.parse(obj.coordinatorPlan) as CoordinatorPlan | null) ?? undefined
-      : undefined,
     spawningNamespace: obj.spawningNamespace || undefined,
     cronId: obj.cronId || undefined,
     chatId: obj.chatId ? parseInt(obj.chatId, 10) : undefined,

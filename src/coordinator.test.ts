@@ -52,13 +52,6 @@ vi.mock("./logger.js", () => ({
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeManager() {
-  return {
-    spawn: vi.fn(async () => "child-job-id"),
-    list: vi.fn(() => []),
-  };
-}
-
 function makeEvent(overrides: Partial<JobEvent> = {}): JobEvent {
   return {
     jobId: "job-1",
@@ -78,7 +71,6 @@ function makeStreamEntry(event: JobEvent): [string, [string, string[]][]] {
     "title", event.title,
     "repoUrl", event.repoUrl,
     "lastLines", JSON.stringify(event.lastLines),
-    "coordinatorPlan", JSON.stringify(event.coordinatorPlan ?? null),
     "score", event.score !== undefined ? String(event.score) : "",
     "timestamp", event.timestamp,
   ];
@@ -110,7 +102,6 @@ describe("notify()", () => {
 });
 
 describe("Coordinator", () => {
-  let manager: ReturnType<typeof makeManager>;
   let coordinator: Coordinator;
 
   beforeEach(() => {
@@ -121,46 +112,14 @@ describe("Coordinator", () => {
     mockRedisXreadgroup.mockResolvedValue(null); // safe default: no entries
     mockRedisXgroup.mockResolvedValue("OK");
     mockRedisXack.mockResolvedValue(1);
-    manager = makeManager();
-    coordinator = new Coordinator(manager as any, "test-ns");
+    coordinator = new Coordinator("test-ns");
   });
 
   afterEach(async () => {
     await coordinator.stop();
   });
 
-  // Test 1: onComplete chain fires on job completion via coordinator_plan
-  it("spawns next job when coordinator_plan.next_step is set on done event", async () => {
-    const event = makeEvent({
-      status: "done",
-      coordinatorPlan: { next_step: { repo_url: "https://github.com/test/next", task: "do next thing" } },
-    });
-
-    await coordinator.processEvent(event);
-
-    expect(manager.spawn).toHaveBeenCalledWith({
-      repoUrl: "https://github.com/test/next",
-      task: "do next thing",
-    });
-  });
-
-  // Test 2: coordinator_plan from Redis stream entry fires on completion
-  it("reads coordinatorPlan from stream event and spawns next job", async () => {
-    const event = makeEvent({
-      coordinatorPlan: { next_step: { repo_url: "https://github.com/test/child", task: "child task" } },
-    });
-    // poll() calls xreadgroup once (with '>') — one mock value is enough
-    mockRedisXreadgroup.mockResolvedValueOnce([makeStreamEntry(event)]);
-
-    await (coordinator as any).poll();
-
-    expect(manager.spawn).toHaveBeenCalledWith({
-      repoUrl: "https://github.com/test/child",
-      task: "child task",
-    });
-  });
-
-  // Test 3: Failed job triggers JSON notification
+  // Failed job triggers JSON notification
   it("publishes JSON failure notification on failed event", async () => {
     const event = makeEvent({ status: "failed", title: "My Job", repoUrl: "https://github.com/test/repo" });
     await coordinator.processEvent(event);
@@ -171,7 +130,7 @@ describe("Coordinator", () => {
     );
   });
 
-  // Test 4a: notifyPayload also rpushes to discordNotify list for polling delivery
+  // notifyPayload also rpushes to discordNotify list for polling delivery
   it("rpushes payload to discordNotify list for cc-discord polling", async () => {
     const event = makeEvent({ status: "done", title: "My Task", repoUrl: "https://github.com/test/repo" });
     await coordinator.processEvent(event);
@@ -182,31 +141,32 @@ describe("Coordinator", () => {
     );
   });
 
-  // Test 4: Coordinator survives Redis error and continues processing
+  // Coordinator survives Redis error and continues processing
   it("logs error but continues when xreadgroup throws", async () => {
     mockRedisXreadgroup.mockRejectedValueOnce(new Error("connection lost"));
     // Should not throw
     await expect((coordinator as any).poll()).resolves.toBeUndefined();
   });
 
-  it("logs error but continues when processEvent throws", async () => {
-    manager.spawn.mockRejectedValueOnce(new Error("spawn failed"));
-    const event = makeEvent({
-      coordinatorPlan: { next_step: { repo_url: "https://github.com/x/y", task: "t" } },
-    });
+  it("logs error but continues when processEvent throws during poll", async () => {
+    // Cause processEvent to throw by mangling the stream entry
+    const event = makeEvent({ status: "done" });
     mockRedisXreadgroup.mockResolvedValueOnce([makeStreamEntry(event)]);
+    // Override processEvent to throw temporarily
+    const orig = coordinator.processEvent.bind(coordinator);
+    coordinator.processEvent = vi.fn().mockRejectedValueOnce(new Error("unexpected"));
     await expect((coordinator as any).poll()).resolves.toBeUndefined();
+    coordinator.processEvent = orig;
   });
 
-  // Test 5: Missed events replayed on startup
+  // Missed events replayed on startup
   it("replays events written before coordinator starts", async () => {
     const events = [
-      makeEvent({ jobId: "a", coordinatorPlan: { next_step: { repo_url: "https://github.com/r/a", task: "t1" } } }),
       makeEvent({ jobId: "b", status: "failed" }),
       makeEvent({ jobId: "c", status: "done", score: 0.3 }),
     ];
 
-    // All three entries returned in one xreadgroup call (replay '0')
+    // All entries returned in one xreadgroup call (replay '0')
     const allEntries: [string, string[]][] = events.map((e, i) => {
       const fields: string[] = [
         "jobId", e.jobId,
@@ -214,7 +174,6 @@ describe("Coordinator", () => {
         "title", e.title,
         "repoUrl", e.repoUrl,
         "lastLines", "[]",
-        "coordinatorPlan", JSON.stringify(e.coordinatorPlan ?? null),
         "score", e.score !== undefined ? String(e.score) : "",
         "timestamp", new Date().toISOString(),
       ];
@@ -229,10 +188,6 @@ describe("Coordinator", () => {
     await coordinator.start();
     await coordinator.stop();
 
-    // Job "a" had a next_step so spawn should have been called
-    expect(manager.spawn).toHaveBeenCalledWith(
-      expect.objectContaining({ repoUrl: "https://github.com/r/a" }),
-    );
     // Job "b" was failed → JSON notification
     expect(mockRedisPublish).toHaveBeenCalledWith(
       "cca:notify:test-ns",
@@ -276,23 +231,6 @@ describe("Coordinator", () => {
     expect(mockRedisPublish).toHaveBeenCalledWith(
       "cca:notify:test-ns",
       JSON.stringify({ text: "✅ test/repo · job-1\nMy Task" }),
-    );
-  });
-
-  // Done event with coordinatorPlan still notifies ✅ done (and spawns next)
-  it("notifies JSON ✅ done even when coordinatorPlan fires", async () => {
-    const event = makeEvent({
-      status: "done",
-      title: "Parent Task",
-      repoUrl: "https://github.com/test/repo",
-      coordinatorPlan: { next_step: { repo_url: "https://github.com/test/next", task: "next" } },
-    });
-    await coordinator.processEvent(event);
-
-    expect(manager.spawn).toHaveBeenCalled();
-    expect(mockRedisPublish).toHaveBeenCalledWith(
-      "cca:notify:test-ns",
-      JSON.stringify({ text: "✅ test/repo · job-1\nParent Task" }),
     );
   });
 
@@ -342,23 +280,9 @@ describe("Coordinator", () => {
     expect(mockRedisPublish).not.toHaveBeenCalled();
   });
 
-  // coordinatorPlan is ignored when status is failed (no spawn, but notifies)
-  it("does not spawn next job when status is failed even if coordinatorPlan is set", async () => {
-    const event = makeEvent({
-      status: "failed",
-      coordinatorPlan: { next_step: { repo_url: "https://github.com/x/y", task: "next" } },
-    });
-    await coordinator.processEvent(event);
-    expect(manager.spawn).not.toHaveBeenCalled();
-    expect(mockRedisPublish).toHaveBeenCalledWith(
-      "cca:notify:test-ns",
-      expect.stringContaining("❌"),
-    );
-  });
-
   // stop() before start() is a no-op
   it("stop() before start() does not throw", async () => {
-    const freshCoordinator = new Coordinator(makeManager() as any, "fresh-ns");
+    const freshCoordinator = new Coordinator("fresh-ns");
     await expect(freshCoordinator.stop()).resolves.toBeUndefined();
   });
 
@@ -370,7 +294,7 @@ describe("Coordinator", () => {
       .mockReturnValueOnce(null) // for xgroup inside start()
       .mockReturnValueOnce(null); // for replayMissedEvents
 
-    const freshCoordinator = new Coordinator(makeManager() as any, "no-redis-ns");
+    const freshCoordinator = new Coordinator("no-redis-ns");
     await freshCoordinator.start();
     await freshCoordinator.stop();
 
@@ -388,8 +312,6 @@ describe("Coordinator", () => {
     await coordinator.start();
     await coordinator.stop();
 
-    // The tombstoned entry should have been skipped — spawn should not have been called
-    expect(manager.spawn).not.toHaveBeenCalled();
     // xack should not have been called for tombstoned entries (they were skipped silently)
     expect(mockRedisXack).not.toHaveBeenCalledWith("cca:event-stream", "coordinator", "2-0");
   });
@@ -435,16 +357,5 @@ describe("Coordinator", () => {
     const lines = payload.text.split("\n");
     // Second line is the truncated title
     expect(lines[1].length).toBeLessThanOrEqual(160);
-  });
-
-  // spawnNext logs a warning when spawn rejects
-  it("spawnNext logs warning when manager.spawn rejects on done event with coordinator plan", async () => {
-    manager.spawn.mockRejectedValueOnce(new Error("docker failure"));
-    const event = makeEvent({
-      status: "done",
-      coordinatorPlan: { next_step: { repo_url: "https://github.com/x/y", task: "task" } },
-    });
-    // Should not throw even when spawn rejects
-    await expect(coordinator.processEvent(event)).resolves.toBeUndefined();
   });
 });
