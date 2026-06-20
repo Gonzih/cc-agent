@@ -10,14 +10,6 @@ export interface GateFailure {
 
 export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max" | "auto";
 
-export interface CoordinatorPlan {
-  next_step?: {
-    repo_url: string;
-    task: string;
-  };
-  summary?: string;
-}
-
 export interface JobEvent {
   jobId: string;
   status: string;
@@ -26,7 +18,6 @@ export interface JobEvent {
   lastLines: string[];   // last 5 lines from job output
   score?: number;
   timestamp: string;     // ISO 8601 date string
-  coordinatorPlan?: CoordinatorPlan;
   spawningNamespace?: string; // namespace of the caller that spawned this job
   cronId?: string;        // set when this job was spawned by a cron trigger
   chatId?: number;        // Discord/Telegram chat ID for notification routing

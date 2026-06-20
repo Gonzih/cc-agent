@@ -10,7 +10,7 @@ import { tailLogFile } from "./claude.js";
 import type { UsageEvent as DriverUsageEvent } from "./drivers/types.js";
 import type { UsageEvent } from "./claude.js";
 import { injectPreamble, getPreambleText, BROWSER_HINT, CODE_QUALITY_CHECKLIST, isCodeTask } from "./preamble.js";
-import type { Job, JobSummary, SpawnOptions, JobEvent, CoordinatorPlan, EffortLevel } from "./types.js";
+import type { Job, JobSummary, SpawnOptions, JobEvent, EffortLevel } from "./types.js";
 import { runLoopGates, LOOP_MAX_ITERATIONS } from "./loop.js";
 import { ensureStateDirs, isPidAlive } from "./state.js";
 import { jobStore, learningsStore, wikiStore, type JobRecord } from "./store.js";
@@ -24,7 +24,6 @@ import { notifyPayload } from "./coordinator.js";
 import {
   jobOutputKey,
   jobLogOffsetKey,
-  coordinatorPlanKey,
   EVENT_STREAM,
   jobDoneChannel,
   jobDoneQueueKey,
@@ -625,10 +624,7 @@ export class JobManager {
     if (!redis) return;
     (async () => {
       try {
-        const [lastLines, planRaw] = await Promise.all([
-          redis.lrange(jobOutputKey(job.id), -5, -1),
-          redis.get(coordinatorPlanKey(job.id)),
-        ]);
+        const lastLines = await redis.lrange(jobOutputKey(job.id), -5, -1);
         const event: JobEvent = {
           jobId: job.id,
           status: job.status,
@@ -643,7 +639,6 @@ export class JobManager {
           lastLines,
           score: job.score ?? undefined,
           timestamp: new Date().toISOString(), // Protocol: ISO 8601 string
-          coordinatorPlan: planRaw ? (JSON.parse(planRaw) as CoordinatorPlan) : undefined,
           spawningNamespace: job.spawningNamespace,
           cronId: job.cronId,
           chatId: job.chatId,
@@ -657,7 +652,6 @@ export class JobManager {
             'title', event.title,
             'repoUrl', event.repoUrl,
             'lastLines', JSON.stringify(event.lastLines),
-            'coordinatorPlan', JSON.stringify(event.coordinatorPlan ?? null),
             'score', event.score !== undefined ? String(event.score) : '',
             'timestamp', event.timestamp, // ISO 8601 string — XADD requires string values
             'spawningNamespace', event.spawningNamespace ?? '',

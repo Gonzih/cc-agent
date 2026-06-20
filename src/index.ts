@@ -41,7 +41,6 @@ import { CronEngine } from "./cron.js";
 import { listCcAgentContainers } from "./docker.js";
 import { loadTokens, getTokenStatus, MASTER_TOKEN_KEY } from "./tokens.js";
 import {
-  coordinatorPlanKey,
   jobDoneChannel,
   notifyLogKey,
   JOB_INDEX_GLOB,
@@ -89,7 +88,7 @@ function extractGithubOwner(repoUrl: string): string | null {
 
 const manager = new JobManager(token);
 const namespace = getNamespace();
-const coordinator = new Coordinator(manager, namespace);
+const coordinator = new Coordinator(namespace);
 const cronEngine = new CronEngine(manager, namespace);
 
 const server = new Server(
@@ -254,23 +253,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "number",
             description:
               "LoopJob: maximum number of worker iterations before declaring loop_exhausted. Default 3. Hard cap 3.",
-          },
-          coordinator_plan: {
-            type: "object",
-            description: "Optional plan for cc-tg coordinator. If set, cc-tg will spawn the nextStep when this job completes.",
-            properties: {
-              next_step: {
-                type: "object",
-                properties: {
-                  repo_url: { type: "string" },
-                  task: { type: "string" },
-                },
-              },
-              summary: {
-                type: "string",
-                description: "Human-readable description of what this job is part of",
-              },
-            },
           },
         },
         required: ["repo_url", "task"],
@@ -1036,22 +1018,6 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         qualityRubric: a.quality_rubric as string | undefined,
         maxIterations: a.max_iterations as number | undefined,
       });
-
-      if (a.coordinator_plan) {
-        const redis = getRedis();
-        if (redis) {
-          try {
-            await redis.set(
-              coordinatorPlanKey(jobId),
-              JSON.stringify(a.coordinator_plan),
-              'EX',
-              7 * 24 * 3600,
-            );
-          } catch (err) {
-            logger.warn("coordinator-plan:store-failed", { jobId, err: String(err) });
-          }
-        }
-      }
 
       if (!isTrusted && owner) {
         // Create a GitHub issue on the repo requesting approval

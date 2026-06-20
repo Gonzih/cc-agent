@@ -708,7 +708,6 @@ describe("Redis stream job events", () => {
     mockIsPidAlive.mockReturnValue(false);
     mockJobStoreLoadAll.mockResolvedValue([]);
     mockRedisLrange.mockResolvedValue(["line1", "line2"]);
-    mockRedisGet.mockResolvedValue(null);
     mockRedisXadd.mockResolvedValue("1-1");
     mockRedisXtrim.mockResolvedValue(0);
     mockRedisLpop.mockResolvedValue(null);
@@ -716,7 +715,6 @@ describe("Redis stream job events", () => {
     mockGetRedis.mockReturnValue({
       publish: mockRedisPublish,
       lrange: mockRedisLrange,
-      get: mockRedisGet,
       xadd: mockRedisXadd,
       xtrim: mockRedisXtrim,
       lpop: mockRedisLpop,
@@ -770,40 +768,6 @@ describe("Redis stream job events", () => {
     });
     expect(doneCall).toBeDefined();
     expect(parseXaddFields(doneCall!).title).toBe("My job title");
-  });
-
-  it("includes coordinatorPlan in event when Redis key is set", async () => {
-    const plan = { next_step: { repo_url: "https://github.com/test/next.git", task: "Next task" }, summary: "Part of a plan" };
-    mockRedisGet.mockResolvedValue(JSON.stringify(plan));
-    const manager = new JobManager();
-    const id = await manager.spawn({
-      repoUrl: "https://github.com/test/repo.git",
-      task: "Coordinator plan test",
-    });
-    await new Promise((r) => setTimeout(r, 200));
-    const doneCall = mockRedisXadd.mock.calls.find((args) => {
-      const f = parseXaddFields(args);
-      return f.status === "done" && f.jobId === id;
-    });
-    expect(doneCall).toBeDefined();
-    expect(JSON.parse(parseXaddFields(doneCall!).coordinatorPlan)).toEqual(plan);
-  });
-
-  it("omits coordinatorPlan from event when Redis key is absent", async () => {
-    mockRedisGet.mockResolvedValue(null);
-    const manager = new JobManager();
-    const id = await manager.spawn({
-      repoUrl: "https://github.com/test/repo.git",
-      task: "No coordinator plan test",
-    });
-    await new Promise((r) => setTimeout(r, 200));
-    const doneCall = mockRedisXadd.mock.calls.find((args) => {
-      const f = parseXaddFields(args);
-      return f.status === "done" && f.jobId === id;
-    });
-    expect(doneCall).toBeDefined();
-    // coordinatorPlan field should serialize to "null" (no plan)
-    expect(parseXaddFields(doneCall!).coordinatorPlan).toBe("null");
   });
 
   it("does not crash if Redis is unavailable (getRedis returns null)", async () => {
