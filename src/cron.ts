@@ -102,12 +102,17 @@ const UPDATE_CRON_LUA = `
 `;
 
 export class CronEngine {
+  private manager: JobManager;
+  private namespace: string;
   private running = false;
   private tickTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly startupTime = Date.now();
   private readonly firedOnStartup = new Set<string>();
 
-  constructor(private manager: JobManager, private namespace: string) {}
+  constructor(manager: JobManager, namespace: string) {
+    this.manager = manager;
+    this.namespace = namespace;
+  }
 
   async start(): Promise<void> {
     if (this.running) return;

@@ -54,10 +54,13 @@ export async function notifyPayload(namespace: string, payload: Record<string, u
 }
 
 export class Coordinator {
+  private namespace: string;
   private running = false;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(private namespace: string) {}
+  constructor(namespace: string) {
+    this.namespace = namespace;
+  }
 
   async start(): Promise<void> {
     if (this.running) return;
