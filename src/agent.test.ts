@@ -252,8 +252,8 @@ describe("JobManager", () => {
     const mockKill = vi.fn();
     (manager as any).kills.set(id, mockKill);
 
-    // Trigger the SIGTERM handler registered in the constructor
-    process.emit("SIGTERM");
+    // Trigger the SIGINT handler registered in the constructor
+    process.emit("SIGINT");
 
     expect(mockKill).toHaveBeenCalled();
   });
@@ -715,6 +715,7 @@ describe("Redis stream job events", () => {
     mockGetRedis.mockReturnValue({
       publish: mockRedisPublish,
       lrange: mockRedisLrange,
+      get: mockRedisGet,
       xadd: mockRedisXadd,
       xtrim: mockRedisXtrim,
       lpop: mockRedisLpop,

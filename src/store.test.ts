@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, beforeAll } from "vitest";
 import { JobStore, LearningsStore, ProfileStore, PlanStore } from "./store.js";
 import type { JobRecord, Profile, PlanRecord } from "./store.js";
 import { initRedis, getRedis } from "./redis.js";
+import { ensureStateDirs } from "./state.js";
 import { randomUUID } from "crypto";
 
 // Restore namespace env vars after each test (test-setup.ts flushes Redis DB)
@@ -162,6 +163,10 @@ describe("LearningsStore", () => {
 // test runs (appendLog writes to ~/.cc-agent/jobs/{id}.log on disk).
 
 describe("JobStore — appendOutput / getOutput", () => {
+  beforeAll(() => {
+    ensureStateDirs();
+  });
+
   function makeJob(overrides: Partial<JobRecord> = {}): JobRecord {
     return {
       id: randomUUID(),          // unique per test run to avoid disk state pollution
