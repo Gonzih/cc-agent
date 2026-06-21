@@ -131,6 +131,7 @@ vi.mock("./logger.js", () => ({
 }));
 vi.mock("./coordinator.js", () => ({
   notify: vi.fn(async () => {}),
+  notifyPayload: vi.fn(async () => {}),
 }));
 
 // fs mocks — default: no crons.json present
@@ -365,10 +366,12 @@ describe("CronEngine — tick / firing", () => {
 
     await engine.tick();
 
-    expect(manager.spawn).toHaveBeenCalledWith({
-      repoUrl: "https://github.com/test/myrepo",
-      task: "repo task",
-    });
+    expect(manager.spawn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoUrl: "https://github.com/test/myrepo",
+        task: "repo task",
+      }),
+    );
   });
 
   it("does NOT fire cron with enabled: false", async () => {
