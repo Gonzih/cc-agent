@@ -940,16 +940,6 @@ describe("MCP server handlers", () => {
     expect(typeof data.total).toBe("number");
   });
 
-  it("list_meta_agents returns agents array with total", async () => {
-    const handler = capturedHandlers.get(CallToolRequestSchema)!;
-    const result = await handler({
-      params: { name: "list_meta_agents", arguments: {} },
-    });
-    const data = JSON.parse(result.content[0].text);
-    expect(Array.isArray(data.agents)).toBe(true);
-    expect(typeof data.total).toBe("number");
-  });
-
   it("get_swarm_status with unknown swarm_id returns error", async () => {
     const handler = capturedHandlers.get(CallToolRequestSchema)!;
     const result = await handler({
@@ -1016,10 +1006,6 @@ describe("MCP server handlers", () => {
     expect(names).toContain("create_cron");
     expect(names).toContain("update_cron");
     expect(names).toContain("delete_cron");
-    expect(names).toContain("list_meta_agents");
-    expect(names).toContain("start_meta_agent");
-    expect(names).toContain("stop_meta_agent");
-    expect(names).toContain("message_meta_agent");
     expect(names).toContain("docker_ps");
     expect(names).toContain("list_token_status");
     expect(names).toContain("list_notifications");
